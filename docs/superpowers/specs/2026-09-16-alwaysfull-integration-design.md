@@ -88,17 +88,59 @@ plain pytest without a Home Assistant test harness, which keeps the hard part
 
 ### Entity model
 
-| Platform | Entities |
-| --- | --- |
-| `sensor` | water consumed today, drink count today, last drink, filter life remaining, filter days remaining, firmware version (diagnostic), signal (diagnostic) |
-| `binary_sensor` | online (`connectivity`), pump alarm (`problem`), filter due (`problem`), flushing (`running`) |
-| `button` | reset filter, flush now |
-| `select` / `number` / `switch` | flush interval, sleep schedule, units, notification toggles |
-| `event` | device alert — one event entity carrying the vendor's notification types |
+Derived from the verified API contract. Three fields in the first draft of this
+spec — `flushing`, `online`, `filterable` — turned out **not to be API fields**
+at all, and the drinking log turned out to carry **daily aggregates only**, so
+"drink count today" and "last drink" are not obtainable. Both corrections are
+reflected below.
 
-The exact field names, units and enum values behind each entity come from the
-API contract document and are confirmed against a live response before the
-entity ships. Entities are not written speculatively.
+| Platform | Entities | Source field |
+| --- | --- | --- |
+| `sensor` | water consumed today | `/app/drinking/log` `totalCapacity` |
+| | filter due state (`ok` / `due_soon` / `overdue`) | `filterDueState` |
+| | water source (`none` / `bottle_pump` / `wall_unit`) — diagnostic | `slaveType` |
+| | firmware version — diagnostic | `version` |
+| `binary_sensor` | online (`connectivity`) | `status == 1` |
+| | system problem (`problem`) | `systemSuspended \|\| hardwareFailure` |
+| | water fill alarm (`problem`) | `injectionAlarm == 1` |
+| | pump alarm (`problem`) | `pumpAlarm == 1` |
+| | not level (`problem`) | `horizontalAlarm == 1` |
+| | filter fault (`problem`) | `filterState == 0` |
+| `number` | flush interval (min), flush duration, filter life (months), filter capacity (ml), maintenance interval (days), daily min/max water | `cleanCycle`, `cleanTime`, `filterCanUseTime`, `filterCapacity`, `deviceCanUseTime`, `dayMinWater`, `dayMaxWater` |
+| `switch` | flush after filling, sleep mode, drinking-log recording, text alerts, email alerts | `fillWashState`, `sleepState`, `logState`, `isTextNotify`, `isEmailNotify` |
+| `time` | sleep start, sleep end | `sleepStart` / `sleepEnd` (minutes since midnight) |
+| `select` | units (ml/oz), bowl size (9"/7") | `units`, `deviceType` |
+| `button` | reset filter life | `/app/device/reset/filter` |
+| `event` | device alert, event types `ordinary` / `alarm` | `/app/notify/getNotifyLog` `mark` |
+
+There is no "flush now" endpoint, so that button from the first draft is
+dropped. `logState` is a live endpoint the vendor's own app never calls.
+
+Entities are not written speculatively: anything whose field name or enum is
+marked UNKNOWN in the contract waits for a live response.
+
+### Traps the implementation must honour
+
+These come from the contract and each one silently corrupts a write if missed:
+
+1. **The device-id parameter name is not uniform.** `deviceId` for
+   list/detail/delete/update/config/setUnits/ota/drinking-log; **`devNo`** for
+   setType/flushConfig/sleepConfig/filterConfig/maintenanceConfig/waterConfig/
+   logConfig/reset-filter.
+2. **Filter capacity is read as `capacity` but written as `filterCapacity`.**
+3. **Wire units differ from UI units**: `cleanCycle` seconds↔minutes,
+   `filterCanUseTime` and `cleanWarnTime` seconds↔30-day "months",
+   `deviceCanUseTime` seconds↔days, `sleepStart`/`sleepEnd` minutes since
+   midnight↔`HH:MM`.
+4. **`deviceType` is inverted**: `0` = 9", `1` = 7".
+5. **`waterConfig` must echo `units`** from `device/detail` or the server
+   misreads the thresholds.
+6. **`sleepConfig`, `waterConfig`, `logConfig` and `notify/saveConfig` are
+   read-modify-write** over the whole object. Never send partials.
+7. **Filter entities are meaningless unless `slaveType == 2`** (Wall Unit); the
+   vendor app hides them entirely otherwise.
+8. `dayMinWater`/`dayMaxWater` must satisfy `min < max`, or both exactly `0`
+   to disable.
 
 ### Alerts
 
@@ -111,6 +153,30 @@ gives automation users a trigger without the vendor's push service.
 If the notification log itself turns out to be server-gated behind the
 subscription, we say so plainly in the README rather than shipping an entity
 that silently never fires.
+
+### Verified platform facts
+
+Checked by introspecting the installed Home Assistant 2026.9.2, not taken from
+documentation or prior art:
+
+- `SensorDeviceClass.WATER` **rejects millilitres** — its units are CCF, L, MCF,
+  ft³, gal, m³. It is the water-meter class for the Energy dashboard.
+  `SensorDeviceClass.VOLUME` accepts both `mL` and `fl. oz.`, which maps exactly
+  onto the bowl's `units` enum. Water consumed today therefore uses `VOLUME` +
+  `TOTAL_INCREASING`. `MEASUREMENT` is not a legal state class for `VOLUME`.
+- `EventDeviceClass` has only `doorbell`, `button`, `motion`. The alert event
+  entity ships with **no device class**.
+- `voluptuous` is still what `homeassistant.config_entries` imports. `probatio`
+  is present in the environment but unused by config entries; config flow
+  schemas use `voluptuous`.
+- `DataUpdateCoordinator.__init__` takes `config_entry` as a keyword argument.
+- `OptionsFlow.config_entry` is a **read-only property** resolved from
+  `self._config_entry_id`. Assigning it — which most tutorials still show —
+  raises.
+- `EventEntity._trigger_event(event_type, extra_data)` exists and is the
+  mechanism for alerts.
+- `pytest` 9 breaks `pytest-homeassistant-custom-component`; the suite pins
+  `pytest==8.4.2`. Verified by booting the `hass` fixture.
 
 ## Error handling
 
