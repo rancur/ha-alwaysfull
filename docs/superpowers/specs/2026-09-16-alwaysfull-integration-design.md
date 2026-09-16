@@ -219,10 +219,61 @@ No real account identifiers appear anywhere in the repo, including test
 fixtures, commit messages and issue templates. Fixtures use obviously synthetic
 values. The PII guard runs in CI so this stays true.
 
+## Live-verified findings
+
+A real session against a real bowl resolved every field the static analysis had
+to mark UNKNOWN. Corrections that matter:
+
+- **`/app/device/detail` has no `filterDueState`.** The vendor app reads a field
+  the server does not send, so its filter-life tile is always green. Filter life
+  is instead computed from `filterUsedTime / filterCanUseTime`, both of which
+  *are* present. Observed: `184467 / 10512000` → 98.2% remaining.
+- **Detail and list rows are the same shape** and carry six fields the app never
+  reads: `controlStatus`, `deviceUsedTime`, `filterUsedTime`, `offline`,
+  `offlineTime`, `onlineTime`. One `device/list` call covers every bowl, so
+  there is no need for N× `device/detail`.
+- **Notify-log rows carry a `type` field the app ignores**, with stable
+  machine-readable codes. The catalogue from `/app/notify/getConfig` is exactly
+  ten: `Tilted`, `Daily_Maximum`, `Fill_Failed`, `Not_Attached`,
+  `High_Water_Level`, `Replace_Wall_Filter`, `Replace_Bowl_Filter`,
+  `Daily_Decreased`, `Operation_Confirmation`, `Hardware_Fault`. These become
+  the event entity's `event_types`.
+- **`mark` is unreliable.** The app's enum claims `1`=Ordinary, `2`=Alarm; live
+  rows carry `0` and `1`. Severity is derived from `type`, not `mark`.
+- **The notify log is populated even with every alert type disabled.** The
+  `enabled` flags gate only the vendor's text/email delivery. Home Assistant
+  therefore gets alerts without the subscription and without turning anything
+  on.
+- **`msg` embeds the device's MAC address** (`"Bowl <mac> is filling."`). Test
+  fixtures must synthesise this string, never copy it.
+- `/app/device/config` returns four raw protocol-framing fields —
+  `headLength`, `bodyLength`, `seq`, `msgCode` — which are not state and are
+  ignored.
+- `/app/ota/check` returns `603 system error`; no OTA entities ship.
+
+### Additional platform facts, verified
+
+- **`strings.json` is not read at runtime for custom integrations.** A full
+  literal `translations/en.json` must ship, with no `[%key:common::...%]`
+  references — those render literally and hassfest does not catch it.
+- **`EventEntity._trigger_event()` does not write state**; it only records the
+  event. `async_write_ha_state()` must follow, and polled sources must dedupe
+  or every poll re-fires. Notify rows carry a stable `id`, which is the dedupe
+  key.
+- **Home Assistant 2026.9 declares `probatio`, not `voluptuous`**, and aliases
+  the latter in `sys.modules` via `install_as_voluptuous()`, whose source
+  comment names custom integrations as the reason it exists. `import voluptuous
+  as vol` is therefore correct and portable; `voluptuous` is added to the dev
+  requirements so mypy can resolve it.
+- **No `home-assistant/brands` PR**: brands stopped accepting new custom
+  components in 2026.3. The icon ships at
+  `custom_components/alwaysfull/brand/icon.png`.
+- `integration_type` is `hub` — one account can hold several bowls.
+
 ## Open questions
 
-1. The credential stored in 1Password does not authenticate (`652`). Live
-   verification is blocked until that is resolved. Implementation and unit
-   tests are not blocked.
-2. Whether the notification log and the write endpoints are server-gated behind
-   the subscription is unknown until we have a working session.
+1. Whether the write endpoints are server-gated behind the subscription. The
+   paywall is client-side only (a translucent overlay over live controls), but
+   that is not proof the server does not check. Settled by one write against a
+   non-subscribed account, done with the owner's consent before any write
+   entity ships.

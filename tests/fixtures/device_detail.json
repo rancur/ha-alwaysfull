@@ -1,0 +1,29 @@
+{
+  "code": "200",
+  "msg": "success",
+  "data": {
+    "id": 2001,
+    "userId": 1001,
+    "deviceId": "aabbccddeeff",
+    "deviceName": "Test Bowl",
+    "status": 1,
+    "version": "3.6.2",
+    "createTime": "2026-09-15 05:49:02",
+    "updateTime": "2026-09-15 05:49:02",
+    "onlineTime": "2026-09-15 22:08:57",
+    "offlineTime": null,
+    "deviceType": 0,
+    "slaveType": 2,
+    "filterUsedTime": 184467,
+    "deviceUsedTime": 184468,
+    "filterState": 1,
+    "horizontalAlarm": 0,
+    "pumpAlarm": 0,
+    "injectionAlarm": 0,
+    "systemSuspended": 0,
+    "hardwareFailure": 0,
+    "controlStatus": 0,
+    "units": 1,
+    "offline": false
+  }
+}

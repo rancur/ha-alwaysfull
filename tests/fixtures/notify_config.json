@@ -1,0 +1,117 @@
+{
+  "code": "200",
+  "msg": "success",
+  "data": {
+    "id": 2001,
+    "userId": 1001,
+    "isTextNotify": 1,
+    "isEmailNotify": 1,
+    "config": 0,
+    "createTime": "2026-09-15 22:09:26",
+    "updateTime": "2026-09-15 22:10:00",
+    "notifyItems": [
+      {
+        "type": "Tilted",
+        "desc": "Bowl or Controller Tilted",
+        "enabled": false
+      },
+      {
+        "type": "Daily_Maximum",
+        "desc": "Daily Maximum Water Reached",
+        "enabled": false
+      },
+      {
+        "type": "Fill_Failed",
+        "desc": "Failed to Fill",
+        "enabled": false
+      },
+      {
+        "type": "Not_Attached",
+        "desc": "Controller not Attached Firmly",
+        "enabled": false
+      },
+      {
+        "type": "High_Water_Level",
+        "desc": "High Water Level Detected",
+        "enabled": false
+      },
+      {
+        "type": "Replace_Wall_Filter",
+        "desc": "Replace Wall Unit Filter",
+        "enabled": false
+      },
+      {
+        "type": "Replace_Bowl_Filter",
+        "desc": "Replace Bowl Filter",
+        "enabled": false
+      },
+      {
+        "type": "Daily_Decreased",
+        "desc": "Pet Daily Average Decreased",
+        "enabled": false
+      },
+      {
+        "type": "Operation_Confirmation",
+        "desc": "Normal Operation Confirmation",
+        "enabled": false
+      },
+      {
+        "type": "Hardware_Fault",
+        "desc": "Hardware Fault",
+        "enabled": false
+      }
+    ],
+    "notifyList": [
+      {
+        "type": "Tilted",
+        "desc": "Bowl or Controller Tilted",
+        "enabled": false
+      },
+      {
+        "type": "Daily_Maximum",
+        "desc": "Daily Maximum Water Reached",
+        "enabled": false
+      },
+      {
+        "type": "Fill_Failed",
+        "desc": "Failed to Fill",
+        "enabled": false
+      },
+      {
+        "type": "Not_Attached",
+        "desc": "Controller not Attached Firmly",
+        "enabled": false
+      },
+      {
+        "type": "High_Water_Level",
+        "desc": "High Water Level Detected",
+        "enabled": false
+      },
+      {
+        "type": "Replace_Wall_Filter",
+        "desc": "Replace Wall Unit Filter",
+        "enabled": false
+      },
+      {
+        "type": "Replace_Bowl_Filter",
+        "desc": "Replace Bowl Filter",
+        "enabled": false
+      },
+      {
+        "type": "Daily_Decreased",
+        "desc": "Pet Daily Average Decreased",
+        "enabled": false
+      },
+      {
+        "type": "Operation_Confirmation",
+        "desc": "Normal Operation Confirmation",
+        "enabled": false
+      },
+      {
+        "type": "Hardware_Fault",
+        "desc": "Hardware Fault",
+        "enabled": false
+      }
+    ]
+  }
+}

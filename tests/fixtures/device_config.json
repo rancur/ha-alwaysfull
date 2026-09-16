@@ -1,0 +1,25 @@
+{
+  "code": "200",
+  "msg": "Success",
+  "data": {
+    "headLength": 12,
+    "bodyLength": 40,
+    "seq": 2,
+    "msgCode": 32,
+    "devNo": "aabbccddeeff",
+    "filterCanUseTime": 10512000,
+    "capacity": 378541,
+    "deviceCanUseTime": 0,
+    "cleanWarnTime": 0,
+    "cleanCycle": 3600,
+    "cleanTime": 25,
+    "dayMinWater": 2000,
+    "dayMaxWater": 7500,
+    "logState": 0,
+    "deviceType": 0,
+    "fillWashState": 0,
+    "sleepState": 0,
+    "sleepStart": 1320,
+    "sleepEnd": 360
+  }
+}

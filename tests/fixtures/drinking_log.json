@@ -1,0 +1,38 @@
+{
+  "code": "200",
+  "msg": "success",
+  "data": [
+    {
+      "totalCapacity": 0,
+      "drinkingDate": "2026-09-10"
+    },
+    {
+      "totalCapacity": 0,
+      "drinkingDate": "2026-09-11"
+    },
+    {
+      "totalCapacity": 0,
+      "drinkingDate": "2026-09-12"
+    },
+    {
+      "totalCapacity": 0,
+      "drinkingDate": "2026-09-13"
+    },
+    {
+      "totalCapacity": 0,
+      "drinkingDate": "2026-09-14"
+    },
+    {
+      "totalCapacity": 711,
+      "drinkingDate": "2026-09-15"
+    },
+    {
+      "totalCapacity": 903,
+      "drinkingDate": "2026-09-16"
+    },
+    {
+      "totalCapacity": 0,
+      "drinkingDate": "2026-09-17"
+    }
+  ]
+}
