@@ -1,0 +1,8 @@
+# Verified working set on Python 3.14.4 against Home Assistant 2026.9.x
+homeassistant==2026.9.2
+pytest==8.4.2                              # pytest 9 breaks pytest-homeassistant-custom-component
+pytest-homeassistant-custom-component==0.13.365
+pytest-asyncio==1.4.0
+syrupy==6.0.0
+ruff==0.16.8
+mypy==2.3.1
