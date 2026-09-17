@@ -49,6 +49,34 @@ no-op. `_unchanged_keeps_raw` leaves the config untouched when the new
 value floors to the value already displayed, so the ORIGINAL seconds are
 what get written back. A genuine change converts normally and the drift
 never accumulates.
+
+## Why the filter settings here are NOT gated to a wall unit
+
+`sensor.py` and `binary_sensor.py` report nothing for filter life, filter
+time remaining and filter fault unless `slaveType == 2`. These numbers --
+and the reset button next door -- deliberately do not follow, and the
+reason is that a reading and a setting are not the same kind of thing.
+
+A filter reading on a bowl with no filter is a lie: a percentage computed
+against a lifetime nobody is consuming, or, for the fault, a permanent and
+unclearable problem on a bowl that cannot have one. A filter SETTING is
+not. `filterCanUseTime` and `filterCapacity` are stored on the bowl
+whatever is plugged into it; they survive attaching a wall unit later, and
+setting the lifetime to 0 is how an owner turns filter tracking off --
+which is exactly what a bottle-pump owner may want, and could not reach if
+these were gated.
+
+`slaveType` is also a RUNTIME value, and `0` is what a DETACHED wall unit
+reports (this integration ships a `water_source_detached` binary sensor
+for that state). Gating settings on it would take a user's filter settings
+away while their hardware was flapping -- when they most want them.
+
+And a gated number has no good shape: `None` leaves a writable box showing
+nothing, while unavailable removes access to a real stored setting. A
+reading can decline to answer; a setting cannot.
+
+Pinned by `test_the_filter_settings_stay_live_on_a_bottle_pump_bowl`, so
+this is a decision rather than a gate somebody forgot.
 """
 
 from __future__ import annotations

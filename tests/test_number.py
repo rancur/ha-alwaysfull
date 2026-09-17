@@ -517,6 +517,49 @@ async def test_the_daily_threshold_unit_follows_a_units_change_on_the_bowl(
     assert float(after.state) == DAY_MIN
 
 
+async def test_the_filter_settings_stay_live_on_a_bottle_pump_bowl(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The numbers do NOT take the sensors' wall-unit gate, on purpose.
+
+    `sensor.py` and `binary_sensor.py` report nothing for filter life,
+    filter time remaining and filter fault unless `slaveType == 2`,
+    because those are READINGS and a reading about a filter that is not
+    there is a lie -- computed from `filterUsedTime` against a
+    `filterCanUseTime` nobody is consuming, and in the fault's case a
+    permanent, unclearable problem on a bowl that cannot have one.
+
+    These are SETTINGS, and the difference is not cosmetic:
+
+    - `filterCanUseTime` and `filterCapacity` are stored on the bowl
+      whatever is currently plugged into it. They survive attaching a wall
+      unit later, and setting the lifetime to 0 is how an owner turns
+      filter tracking off -- which is exactly the thing a bottle-pump
+      owner might want and could not reach if these were gated.
+    - `slaveType` is a RUNTIME value, and `0` is what a DETACHED wall unit
+      reports too; this integration ships a `water_source_detached` binary
+      sensor for precisely that state. Gating the settings on it would
+      take a user's filter settings away while their hardware was
+      flapping, which is when they are most likely to want them.
+    - A gated NUMBER has no good shape. Reporting `None` leaves a writable
+      box showing nothing, and going unavailable removes access to a real
+      stored setting. A reading can decline to answer; a setting cannot.
+
+    The filter-reset BUTTON is left alone for the same reason, and is
+    already exercised against this bowl by
+    `test_pressing_resets_only_the_bowl_that_was_pressed`.
+
+    This test exists so the difference is a decision somebody made rather
+    than a gate somebody forgot.
+    """
+    await setup_platform(hass, Platform.NUMBER)
+
+    lifetime = hass.states.get(f"{PUMP}filter_lifetime")
+    capacity = hass.states.get(f"{PUMP}filter_capacity")
+    assert float(lifetime.state) == FILTER_CAN_USE // SECONDS_PER_MONTH
+    assert float(capacity.state) == CAPACITY
+
+
 async def test_a_dropped_bowl_keeps_its_last_known_unit(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
