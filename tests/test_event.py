@@ -131,14 +131,25 @@ async def test_startup_does_not_replay_history(
     every Home Assistant restart re-fires all thirteen -- including
     `hardware_fault` and `tilted` -- and every automation bound to them
     runs at once, at whatever hour the restart happened.
+
+    The second poll is not padding, and mutation testing is what showed it:
+    an un-primed entity fires nothing while it is merely being ADDED,
+    because events are fired from the coordinator-update callback. Its
+    replay lands on the first poll after startup instead, so a test that
+    stopped at setup would watch the wrong moment and stay green.
     """
     events = async_capture_events(hass, EVENT_STATE_CHANGED)
-    await setup_platform(hass, Platform.EVENT)
+    entry = await setup_platform(hass, Platform.EVENT)
 
     state = hass.states.get(ALERT)
     assert state is not None
     assert state.state == STATE_UNKNOWN
     assert fired(events) == []
+
+    await poll(hass, entry, mock_api, HISTORY)
+
+    assert fired(events) == []
+    assert hass.states.get(ALERT).state == STATE_UNKNOWN
 
 
 async def test_a_new_row_fires_exactly_one_event_into_the_state_machine(
