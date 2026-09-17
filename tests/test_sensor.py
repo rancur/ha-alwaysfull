@@ -25,6 +25,7 @@ from .conftest import (
     FakeAlwaysFullClient,
     bowl_data,
     device_row,
+    load_fixture_data,
     setup_platform,
 )
 
@@ -132,6 +133,27 @@ async def test_filter_sensors_report_values_on_a_wall_unit(
     # native value is the vendor's seconds.
     assert float(remaining.state) == pytest.approx(FILTER_REMAINING_DAYS, abs=0.01)
     assert remaining.attributes["unit_of_measurement"] == "d"
+
+
+async def test_filter_sensors_are_unknown_when_filter_tracking_is_disabled(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """`filterCanUseTime == 0` is the live-observed "feature disabled" value.
+
+    Dividing by it raises `ZeroDivisionError` and takes down the whole
+    coordinator update, and subtracting from it reports a large NEGATIVE
+    time remaining, which reads as a filter that is catastrophically
+    overdue on a bowl that is not tracking one at all.
+    """
+    mock_api.device_config_override = load_fixture_data("device_config") | {
+        "filterCanUseTime": 0
+    }
+    await setup_platform(hass, Platform.SENSOR)
+
+    for key in ("filter_life", "filter_time_remaining"):
+        state = hass.states.get(f"{WALL}{key}")
+        assert state is not None
+        assert state.state == STATE_UNKNOWN
 
 
 async def test_filter_sensors_are_unknown_on_a_bottle_pump_bowl(
