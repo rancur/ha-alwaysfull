@@ -415,9 +415,10 @@ vendor assigns. A row without one cannot be deduplicated, and firing it would
 re-fire it on every poll for as long as it stayed on the page.
 
 **Not everything in the app is exposed.** There are no OTA entities —
-`/app/ota/check` answers `603 system error` on the live server — and no entity
-for the vendor's `filterDueState`, which their API never actually returns
-(which is why their own filter-life tile is permanently green).
+`/app/ota/check` answers `603` on the live server, the same code the vendor
+uses to say "too many requests", so there is no usable OTA path either way —
+and no entity for the vendor's `filterDueState`, which their API never actually
+returns (which is why their own filter-life tile is permanently green).
 
 ---
 
@@ -469,11 +470,20 @@ app that asks you to sign in again after a while is the same behaviour seen
 from the other side.
 
 What is *not* normal is this failing repeatedly. The integration will not
-re-authenticate more than once per operation — against a one-session-per-
-account server, retrying in a loop is how two clients sign each other out for
-ever — so a failure that persists means the sign-in itself was refused, i.e.
-the account's password has changed. Home Assistant then asks you to
-re-authenticate, which is the case below.
+re-authenticate more than once per operation, and not more than **three times
+in five minutes** overall — against a one-session-per-account server, signing
+in on every failure is how two clients sign each other out for ever, and a
+burst of sign-ins is what the vendor answers with "too many requests".
+
+So a failure that keeps repeating does one of two things, and the difference
+matters:
+
+- **Something else is using the account** (a second Home Assistant, or an app
+  left open somewhere). Past that budget the integration stops signing in for a
+  few minutes: your entities go unavailable and come back on their own. It does
+  **not** ask you to re-authenticate, because your password is not the problem.
+- **The sign-in itself was refused**, i.e. the account's password has changed.
+  Home Assistant asks you to re-authenticate, which is the case below.
 
 **It keeps asking me to re-authenticate.** The vendor returns the same error
 for a wrong password and for an address with no account, so those two cases
@@ -484,6 +494,11 @@ to find out which it is.
 integration re-reads the bowl's config immediately after every write precisely
 so you see the truth rather than what you asked for. Check the log for the
 reason.
+
+**A switch reads `unknown`.** The vendor's answer did not carry that setting.
+It is reported as unknown rather than off on purpose: "off" would invite you to
+switch on something that may already be on. It clears on the next poll that
+carries the field.
 
 **Water today is `unknown`.** Either the server has no row for today yet
 (common early in the morning) or **Drinking log recording** is switched off on
