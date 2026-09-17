@@ -152,8 +152,8 @@ Every response is `{"code": ..., "msg": ..., "data": ...}`. `code` is a
 | --- | --- | --- |
 | `200` | Success. The payload is in `data`. | VERIFIED |
 | `651` | Token expired / rejected. Routine — see §1.5. | VERIFIED |
-| `652` | Credentials rejected (`"Invalid email address or password."`) | VERIFIED |
-| `602` | Also a credential rejection, from the same login endpoint | VERIFIED (observed once, not reproducible on demand) |
+| `652` | **Endpoint-dependent.** From `/app/user/login`: the credentials were rejected (`"Invalid email address or password."`). From a token-bearing call: the SESSION was rejected — see below. | VERIFIED |
+| `602` | The same, and the same split applies | VERIFIED (observed once on login, not reproducible on demand) |
 | `603` | **Rate limited.** `"Too many requests, please try again later."` | VERIFIED |
 
 **`652` does not distinguish a wrong password from an account that does not
@@ -164,6 +164,24 @@ message. No client can tell those two cases apart, and none should try.
 `602`'s exact meaning is unknown. What is certain is that it is a refusal to
 authenticate; treating it as anything else strands the user on "unexpected
 error" instead of "check your password".
+
+**`652` MEANS TWO DIFFERENT THINGS, AND THE ENDPOINT IS WHAT DECIDES WHICH.**
+VERIFIED, the hard way, on a live installation.
+
+- From `/app/user/login` — the only call that authenticates with the
+  email/password pair — it means that pair was rejected. Retrying cannot help.
+  Send the user to reauthentication.
+- From **any token-bearing call** it means the **session** was rejected, not the
+  password. Against a single-session vendor (§1.5) that is routine, and it heals
+  with exactly the one silent re-login `651` gets.
+
+Classifying `652` by code alone, without regard to the endpoint, looks obviously
+right and is not. What it does in production: a transient `652` on a poll skips
+the re-login that would have healed it, every entity goes `unavailable` and
+stays there for as long as nobody restarts anything, and the config entry
+carries on reporting itself as loaded. The credentials are correct the whole
+time. If the subsequent **login** then answers `652`, that is the real thing and
+reauthentication is correct — which is why the relaxation costs nothing.
 
 ### 1.4 `603` IS THE RATE LIMIT, and it is the only one
 
@@ -220,9 +238,11 @@ Any client must be able to re-login and retry. Two rules for doing it safely:
 - **Exactly one re-login per operation, never a loop.** Two clients that each
   retry on `651` will sign each other out for ever, as fast as the network
   allows, and neither will ever make progress.
-- **`651` gets a retry; `652`/`602` do not.** The server has just said the
-  stored email/password pair is wrong. Re-sending the same pair cannot succeed;
-  it only spends requests against the vendor.
+- **`651` gets a retry, and so does a `652` that did not come from the login
+  call.** Both mean the session is dead, and both heal the same way. A `652`
+  from the **login** does not get one: the server has just said the stored
+  email/password pair is wrong. Re-sending the same pair cannot succeed; it
+  only spends requests against the vendor.
 
 ---
 

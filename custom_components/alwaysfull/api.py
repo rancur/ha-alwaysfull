@@ -34,6 +34,7 @@ from .const import (
     CODE_RATE_LIMITED,
     CODE_TOKEN_EXPIRED,
     CREDENTIAL_REJECTION_CODES,
+    LOGIN_PATH,
     SIGN_SECRET,
 )
 from .exceptions import (
@@ -199,13 +200,27 @@ class AlwaysFullClient:
                 for key, value in merged.items()
             }
             async with self._session.request(method_upper, url, headers=headers, params=query) as resp:
-                return await self._handle_response(resp)
+                return await self._handle_response(resp, path)
 
         async with self._session.request(method_upper, url, headers=headers, json=merged) as resp:
-            return await self._handle_response(resp)
+            return await self._handle_response(resp, path)
 
-    async def _handle_response(self, resp: aiohttp.ClientResponse) -> Any:
-        """Map an HTTP response onto the vendor's {code, msg, data} envelope."""
+    async def _handle_response(self, resp: aiohttp.ClientResponse, path: str) -> Any:
+        """Map an HTTP response onto the vendor's {code, msg, data} envelope.
+
+        `path` is load-bearing, not decoration: a credential-rejection code
+        means two entirely different things depending on which endpoint
+        answered it, and classifying it without knowing the endpoint is
+        what let one transient failure brick the integration until Home
+        Assistant was restarted. See the `CREDENTIAL_REJECTION_CODES`
+        branch below.
+
+        It is the path the request was MADE to, passed down from
+        `request()`, rather than anything read back off the response: a
+        redirect or a proxy could make the response's own URL disagree,
+        and the meaning depends on what we asked, not on where the answer
+        came from.
+        """
         if resp.status == _HTTP_TOO_MANY_REQUESTS:
             msg = "Server responded 429 Too Many Requests"
             raise AlwaysFullRateLimitError(msg)
@@ -228,13 +243,37 @@ class AlwaysFullClient:
         if code == CODE_TOKEN_EXPIRED:
             raise AlwaysFullAuthError(payload.get("msg") or "Token expired")
         if code in CREDENTIAL_REJECTION_CODES:
-            # Distinct from the token-expiry case above (see exceptions.py)
-            # but still an `AlwaysFullAuthError`, so every existing caller --
-            # the coordinator's one-silent-re-login path included -- behaves
-            # exactly as before.
-            raise AlwaysFullCredentialsError(
-                payload.get("msg") or "Invalid email address or password"
-            )
+            # THE SAME CODE MEANS TWO DIFFERENT THINGS, and which one it is
+            # depends entirely on the endpoint that answered.
+            #
+            # From `/app/user/login`, the only call that authenticates with
+            # the stored email/password pair, it means exactly what it says:
+            # that pair was rejected. Re-sending it cannot succeed, so this
+            # is `AlwaysFullCredentialsError` -- the class that skips the
+            # re-login and goes to Home Assistant's reauth prompt, where a
+            # human can fix it.
+            #
+            # From any TOKEN-BEARING call it means the SESSION was
+            # rejected, not the password -- the vendor is single-session
+            # (see the coordinator's module docstring), so a session going
+            # bad underneath us is routine, not a fault. Treating it as a
+            # credential failure is what bricked a live install: a
+            # transient 652 on a poll skipped the one silent re-login that
+            # would have healed it, every entity went unavailable and
+            # stayed unavailable for minutes, and the config entry still
+            # reported `loaded` -- with correct credentials the whole time.
+            #
+            # So this is the plain `AlwaysFullAuthError`, the same class
+            # `651` raises and with the same handling: one silent re-login
+            # and one retry. If THAT login then answers 652, it comes back
+            # through the branch above as a credential rejection and reauth
+            # is correct -- which is why this can be relaxed without
+            # weakening the guarantee that a genuinely wrong password
+            # reaches the user.
+            message = payload.get("msg") or "Invalid email address or password"
+            if path == LOGIN_PATH:
+                raise AlwaysFullCredentialsError(message)
+            raise AlwaysFullAuthError(message)
 
         # Anything unclassified stays a plain error: guessing that an unknown
         # code means "bad credentials" would push users into a reauth flow
@@ -256,7 +295,7 @@ class AlwaysFullClient:
         """
         token = await self.request(
             "POST",
-            "/app/user/login",
+            LOGIN_PATH,
             {"account": email, "password": _hash_password(password)},
         )
         self.token = token

@@ -314,6 +314,50 @@ async def test_rate_limit_is_never_mapped_to_auth_failure(
     assert mock_api.login_calls == []
 
 
+async def test_a_transient_652_on_a_poll_heals_with_one_silent_relogin(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A `652` on a TOKEN-BEARING call is a bad session, not a bad password.
+
+    Observed live: after session contention the coordinator logged
+    "Always Full rejected the stored credentials", every entity went
+    unavailable and STAYED unavailable for over four minutes while the
+    entry still reported `loaded`. The stored credentials were correct --
+    authenticating with them moments later worked.
+
+    Built from the real client, so it fails if `api.py` ever goes back to
+    classifying `652` by code alone.
+    """
+    coordinator = await _setup(hass)
+    mock_api.fail_device_list(await vendor_error("652"), times=1)
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is True
+    assert not isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert mock_api.login_calls == ["user@example.com"]
+
+
+async def test_a_652_from_the_login_itself_still_reaches_reauth(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A genuinely wrong password must still reach the reauth prompt.
+
+    The other half of the split, and the one that must not be weakened:
+    the session retry above is only correct because the LOGIN's own answer
+    is still believed. One re-login, then reauth -- never a loop.
+    """
+    coordinator = await _setup(hass)
+    mock_api.fail_device_list(await vendor_error("652"))
+    mock_api.login_error = await vendor_error("652", on_login=True)
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert mock_api.login_calls == ["user@example.com"]
+
+
 async def test_the_vendors_own_rate_limit_code_never_reaches_reauth(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:

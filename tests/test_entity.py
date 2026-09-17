@@ -39,6 +39,7 @@ from .conftest import (
     FakeAlwaysFullClient,
     load_fixture_data,
     setup_platforms,
+    vendor_error,
 )
 
 DESCRIPTION = EntityDescription(key="filter_life")
@@ -410,6 +411,31 @@ async def test_write_that_fails_auth_twice_surfaces_a_readable_error(
     assert "could not apply the change" in str(err.value)
     assert len(mock_api.login_calls) == 1
     assert len(mock_api.writes) == 2
+
+
+async def test_a_write_answered_652_recovers_instead_of_reauthing(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A `652` on a WRITE endpoint is a dead session, and heals like one.
+
+    The write path shares the poll path's recovery, so it shares this fix
+    too -- but it shares it through a different method on a different
+    base, which is exactly where a fix applied in one place stops. The
+    error is built by the real client from a real `652` envelope, so this
+    is asserting the classification and the recovery together.
+    """
+    entity = await _write_entity(hass)
+    mock_api.fail_writes(await vendor_error("652"), times=1)
+
+    await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    assert mock_api.login_calls == [ACCOUNT_EMAIL]
+    assert [method for method, _payload in mock_api.writes] == [
+        "set_flush_config",
+        "set_flush_config",
+    ]
+    await hass.async_block_till_done()
+    assert _reauth_flows(hass) == []
 
 
 async def test_write_rejected_credentials_never_retries_and_reauths(

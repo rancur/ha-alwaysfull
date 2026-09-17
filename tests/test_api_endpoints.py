@@ -142,6 +142,31 @@ async def test_rejected_credentials_raise_credentials_rejected(code: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["652", "602"])
+async def test_a_credential_code_from_a_token_bearing_call_is_a_session_failure(code: str):
+    """The SAME code means something different away from the login endpoint.
+
+    `652` from `/app/user/login` means the password was rejected. `652`
+    from a call that carried a token means the SESSION was rejected -- and
+    against a single-session vendor whose owner signs us out every time
+    they open their phone app, that is routine and heals with one
+    re-login.
+
+    Classifying it as a credential rejection regardless of endpoint is
+    what bricked a live install: a transient `652` on a poll skipped the
+    re-login that would have fixed it, every entity went unavailable, and
+    the config entry still said `loaded`. The stored credentials were
+    correct throughout.
+    """
+    client, _ = _client(
+        {"code": code, "msg": "Invalid email address or password.", "data": None}
+    )
+    with pytest.raises(AlwaysFullAuthError) as err:
+        await client.device_list()
+    assert not isinstance(err.value, AlwaysFullCredentialsError)
+
+
+@pytest.mark.asyncio
 async def test_expired_token_raises_auth_error_but_not_credentials_rejected():
     """651 is an auth error, and stays distinguishable from a bad password.
 
