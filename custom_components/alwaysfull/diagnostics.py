@@ -55,6 +55,15 @@ TO_REDACT = {
     "deviceId",
     "devNo",
     "device_id",
+    # The bowl's NAME, which the user chose. Not an identifier the vendor
+    # issued, which is why a set assembled by looking for identifier-shaped
+    # fields misses it -- but people name bowls after their pets, their
+    # rooms and sometimes themselves. Both spellings, for the same reason
+    # the device id needs three: the wire says `deviceName` and
+    # `dataclasses.asdict(BowlState)` says `device_name`, and each one
+    # appears in this file on its own.
+    "deviceName",
+    "device_name",
     # Free text that embeds the MAC: "Bowl <mac> is filling." Not obvious,
     # and the reason a redaction set built only from field NAMES that look
     # like identifiers is not enough.

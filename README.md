@@ -402,10 +402,10 @@ that bowl.
 (**Settings → Devices & Services → Always Full → ⋮ → Download diagnostics**).
 
 Every field known to be sensitive is redacted before the file is written: your
-email address, password, session token, account id and every bowl's device id
-are replaced with `**REDACTED**`, and so is the text of each alert, because the
-vendor writes your bowl's MAC address into it. Each bowl appears as a derived
-label like `bowl-1a2b3c4d` instead of its id.
+email address, password, session token, account id, every bowl's device id and
+the name you gave each bowl are replaced with `**REDACTED**`, and so is the text
+of each alert, because the vendor writes your bowl's MAC address into it. Each
+bowl appears as a derived label like `bowl-1a2b3c4d` instead of its id or name.
 
 The file **also contains the vendor's raw device record verbatim**, which is
 deliberate — it is what makes a report about an unsupported bowl useful, and it

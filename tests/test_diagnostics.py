@@ -26,7 +26,7 @@ from pytest_homeassistant_custom_component.components.diagnostics import (
 
 from custom_components.alwaysfull.const import DOMAIN
 
-from .conftest import DEVICE_ID, SECOND_DEVICE_ID
+from .conftest import DEVICE_ID, SECOND_DEVICE_ID, load_fixture_data
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -44,6 +44,15 @@ SENTINEL_TOKEN = "SENTINEL-TOKEN-DO-NOT-PUBLISH"
 
 ACCOUNT_EMAIL = "user@example.com"
 
+# The bowl's NAME is the user's, not the vendor's: people name bowls after
+# their pet, their room, or themselves. It is not an identifier the vendor
+# assigned, which is exactly why a redaction set assembled by looking for
+# identifier-shaped fields misses it. It arrives twice -- as `deviceName` in
+# the vendor's raw device row, and as `device_name` once `BowlState` has
+# parsed that row -- so one spelling redacted and the other forgotten
+# publishes it anyway.
+SENTINEL_BOWL_NAME = "SENTINEL-BOWL-NAME-DO-NOT-PUBLISH"
+
 # A bare twelve-hex run, with the neighbours checked by hand rather than
 # with `\b`: `\b` treats a hex/non-hex boundary inside a longer hex string
 # as a word boundary only when the neighbour is non-word, so `\b` alone
@@ -55,6 +64,18 @@ BARE_MAC = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{12}(?![0-9a-fA-F])")
 
 # The punctuated spellings, in case a future field carries one.
 PUNCTUATED_MAC = re.compile(r"(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")
+
+
+def rows_named(name: str) -> list[dict[str, Any]]:
+    """Return the multi-bowl device rows with every bowl renamed to `name`.
+
+    `load_fixture_data` re-reads and re-parses the JSON on every call, so
+    renaming the rows here cannot bleed into any other test.
+    """
+    rows: list[dict[str, Any]] = load_fixture_data("device_list_multi")["data"]
+    for row in rows:
+        row["deviceName"] = name
+    return rows
 
 
 async def _load_entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -93,6 +114,7 @@ async def test_diagnostics_leak_no_credentials_account_or_device_identity(
     key is invisible to `async_redact_data`, which matches key names and
     never looks at values.
     """
+    mock_api.device_rows_override = rows_named(SENTINEL_BOWL_NAME)
     entry = await _load_entry(hass)
     diagnostics = await get_diagnostics_for_config_entry(hass, hass_client, entry)
     text = json.dumps(diagnostics)
@@ -106,6 +128,11 @@ async def test_diagnostics_leak_no_credentials_account_or_device_identity(
     # ("Bowl <mac> is filling.").
     assert DEVICE_ID not in text
     assert SECOND_DEVICE_ID not in text
+
+    # The bowl's name, in BOTH spellings: `deviceName` on the vendor's raw
+    # row and `device_name` on the parsed state. Asserted against the
+    # serialised text, so dropping either key from `TO_REDACT` fails here.
+    assert SENTINEL_BOWL_NAME not in text
 
     # `userId` ties the file to one vendor account.
     assert '"userId"' not in text or '"userId": "**REDACTED**"' in text
