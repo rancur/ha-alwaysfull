@@ -1,0 +1,68 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This Always Full account is already set up in Home Assistant.",
+      "already_in_progress": "Setup for this Always Full account is already in progress.",
+      "reauth_successful": "Re-authentication was successful.",
+      "reconfigure_successful": "Re-configuration was successful."
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Always Full service. Check your internet connection and try again.",
+      "invalid_auth": "Invalid email address or password.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+    },
+    "step": {
+      "reauth_confirm": {
+        "data": {
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "The current password for your Always Full account."
+        },
+        "description": "The password stored for {email} was rejected by Always Full. Enter the current password to reconnect.",
+        "title": "Re-authenticate Always Full"
+      },
+      "reconfigure": {
+        "data": {
+          "email": "Email address",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "The email address of the Always Full account to use. Change it to move this entry to a different account.",
+          "password": "The password for that Always Full account."
+        },
+        "description": "Change which Always Full account this entry uses. The password is needed to confirm the account.",
+        "title": "Reconfigure Always Full"
+      },
+      "user": {
+        "data": {
+          "email": "Email address",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "The email address you sign in to the Always Full app with.",
+          "password": "The password you sign in to the Always Full app with. It is stored so Home Assistant can renew its session when the login token expires."
+        },
+        "description": "Sign in with your Always Full account to add your water bowls to Home Assistant.",
+        "title": "Connect your Always Full account"
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_scan_interval": "Enter a polling interval between 30 and 600 seconds."
+    },
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "scan_interval": "How often Home Assistant asks the Always Full service for new data. Between 30 and 600 seconds; the default is 60. Shorter intervals put more load on the vendor's service."
+        },
+        "description": "Choose how often your bowls are polled.",
+        "title": "Always Full options"
+      }
+    }
+  }
+}
