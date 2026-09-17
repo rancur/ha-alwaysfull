@@ -77,3 +77,35 @@ jobs:
         # silent regression the 140 snapshots exist to catch, so it stays
         # an error.
         run: pytest -q --cov=custom_components.alwaysfull --cov-report=term-missing
+
+  floor:
+    # The `homeassistant` key in hacs.json is a promise: HACS refuses to install
+    # for anyone below it. This job is what keeps that promise honest. It pins the
+    # oldest supported Home Assistant and runs the whole suite against it, using
+    # the pytest-homeassistant-custom-component build released for exactly that
+    # core version -- a mismatched harness reports hundreds of spurious errors and
+    # tells you nothing.
+    #
+    # It exists because the declared floor was once wrong: it claimed a core newer
+    # than the maintainer's own instance, which is the one version anybody had
+    # actually run it on. HACS correctly refused to download it.
+    name: pytest (oldest supported Home Assistant)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Read the declared floor from hacs.json
+        id: floor
+        run: echo "ha=$(python -c "import json;print(json.load(open('hacs.json'))['homeassistant'])")" >> "$GITHUB_OUTPUT"
+      - name: Install the harness built for that exact core
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pytest-homeassistant-custom-component==0.13.357"
+      - name: Fail if the installed core is not the declared floor
+        run: |
+          installed=$(python -c "from homeassistant.const import __version__ as v; print(v)")
+          echo "declared=${{ steps.floor.outputs.ha }} installed=$installed"
+          test "$installed" = "${{ steps.floor.outputs.ha }}"
+      - run: python -m pytest -q
