@@ -473,6 +473,24 @@ def entity_id_for(hass: HomeAssistant, domain: str, unique_id: str) -> str:
     return entity_id
 
 
+def entity_id_for_key(hass: HomeAssistant, domain: str, key: str) -> str:
+    """Return the entity id whose unique id ENDS in `key`.
+
+    For the account-level entities, whose unique id is prefixed with a
+    derived account key. A test that rebuilt that prefix itself would be
+    asserting the implementation against a copy of the implementation, and
+    would keep passing if both were wrong together.
+    """
+    registry = er.async_get(hass)
+    matches = [
+        entry.entity_id
+        for entry in registry.entities.values()
+        if entry.platform == DOMAIN and entry.domain == domain and entry.unique_id.endswith(key)
+    ]
+    assert len(matches) == 1, f"expected one {domain} entity ending in {key!r}, got {matches}"
+    return matches[0]
+
+
 async def setup_platforms(
     hass: HomeAssistant, platforms: list[Platform], **entry_kwargs: Any
 ) -> MockConfigEntry:

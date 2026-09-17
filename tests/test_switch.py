@@ -24,11 +24,16 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import snapshot_platform
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    snapshot_platform,
+)
 from syrupy.assertion import SnapshotAssertion
 
-from custom_components.alwaysfull.const import ALERT_TYPE_OPTIONS
+from custom_components.alwaysfull.const import ALERT_TYPE_OPTIONS, DOMAIN
+from custom_components.alwaysfull.entity import account_key
 from custom_components.alwaysfull.exceptions import AlwaysFullError
 from custom_components.alwaysfull.switch import (
     NOTIFY_SWITCHES,
@@ -41,6 +46,7 @@ from .conftest import (
     ENTRY_UNIQUE_ID,
     FakeAlwaysFullClient,
     entity_id_for,
+    entity_id_for_key,
     load_fixture_data,
     only_write,
     setup_platform,
@@ -54,7 +60,7 @@ def bowl_switch(hass: HomeAssistant, key: str) -> str:
 
 def account_switch(hass: HomeAssistant, key: str) -> str:
     """Return the account-level switch with this description key."""
-    return entity_id_for(hass, SWITCH_DOMAIN, f"{ENTRY_UNIQUE_ID}_{key}")
+    return entity_id_for_key(hass, SWITCH_DOMAIN, f"_{key}")
 
 # `device_config.json`, verbatim.
 CLEAN_CYCLE = 3600
@@ -278,14 +284,54 @@ async def test_notification_switches_are_unavailable_until_the_config_is_known(
 async def test_a_refused_notification_save_raises(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """A server refusal surfaces as a readable error, not a silent no-op."""
-    await setup_platform(hass, Platform.SWITCH)
+    """A server refusal surfaces as a readable error, not a silent no-op.
+
+    And the CACHED object behind the switch must be untouched, which the
+    state machine cannot show: it does not re-read an entity after a failed
+    service call, so a poisoned cache looks identical to a clean one from
+    the outside. The save mutates a deep copy for exactly this reason. With
+    a shallow copy the nested alert rows are the coordinator's own, so a
+    REFUSED save leaves the rejected change sitting in the cache until the
+    next ten-poll fetch -- where it surfaces as truth, and where the next
+    successful save of any other alert switch writes it to the server.
+    """
+    entry = await setup_platform(hass, Platform.SWITCH)
+    pristine = load_fixture_data("notify_config")
+    assert entry.runtime_data.notify_config == pristine
     mock_api.write_error = AlwaysFullError("Account suspended")
 
     with pytest.raises(HomeAssistantError, match="Account suspended"):
         await _turn(hass, account_switch(hass, "alert_tilted"), on=True)
 
     assert hass.states.get(account_switch(hass, "alert_tilted")).state == STATE_OFF
+    assert entry.runtime_data.notify_config == pristine
+
+
+async def test_a_vendor_rename_refuses_the_write_instead_of_pretending(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """An alert type missing from BOTH arrays must fail loudly.
+
+    If the vendor renames a type, the row this switch edits is not there.
+    Saving the object back unchanged would be accepted, the switch would
+    report success, and the alert would stay off for ever with nothing to
+    say so. The guard raises instead -- and nothing is sent, because a
+    write that cannot do what it says should not spend a request.
+    """
+    renamed = load_fixture_data("notify_config")
+    for array in ("notifyItems", "notifyList"):
+        renamed[array] = [row for row in renamed[array] if row["type"] != "Hardware_Fault"]
+    mock_api.saved_notify_config = renamed
+
+    await setup_platform(hass, Platform.SWITCH)
+
+    with pytest.raises(HomeAssistantError, match="Hardware_Fault"):
+        await _turn(hass, account_switch(hass, "alert_hardware_fault"), on=True)
+
+    assert mock_api.writes == []
+    # The other nine are untouched by one type going missing.
+    await _turn(hass, account_switch(hass, "alert_tilted"), on=True)
+    assert only_write(mock_api, "save_notify_config")["notifyItems"][0]["enabled"] is True
 
 
 async def test_a_refused_bowl_write_raises(
@@ -330,3 +376,56 @@ def test_switch_keys_are_unique_across_both_tables() -> None:
     """A duplicate key would collide two switches onto one unique id."""
     keys = [d.key for d in (*SWITCHES, *NOTIFY_SWITCHES)]
     assert len(keys) == len(set(keys))
+
+
+async def test_no_registry_identifier_carries_the_account_email(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Unique ids and device identifiers must not contain the address.
+
+    The account-level entities have to be keyed on the account, and the
+    entry's unique id -- which IS the email address -- is the right thing
+    to derive that from, because it survives a remove-and-re-add. Deriving
+    is the operative word: both of these registries are copied verbatim
+    into a diagnostics download, and diagnostics downloads get pasted into
+    public issue trackers by people who do not know there is an address in
+    them.
+
+    Asserted over every entity and device this entry creates rather than
+    over the one that was easy to think of, and the account entities are
+    asserted to exist, so this cannot pass by finding nothing.
+    """
+    entry = await setup_platform(hass, Platform.SWITCH)
+
+    entities = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+    assert len(entities) == len(NOTIFY_SWITCHES) + 2 * len(SWITCHES)
+    assert any(entity.unique_id.endswith("_alert_tilted") for entity in entities)
+    for entity in entities:
+        assert "@" not in entity.unique_id, entity.entity_id
+        assert ENTRY_UNIQUE_ID not in entity.unique_id, entity.entity_id
+
+    devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert any(device.entry_type is dr.DeviceEntryType.SERVICE for device in devices)
+    for device in devices:
+        for _domain, identifier in device.identifiers:
+            assert "@" not in identifier, identifier
+            assert ENTRY_UNIQUE_ID not in identifier, identifier
+
+
+def test_the_account_key_is_stable_and_account_specific() -> None:
+    """Same account, same key; different account, different key.
+
+    Without the first half the entities would get new unique ids on every
+    restart and orphan their history; without the second, two accounts in
+    one Home Assistant would collide onto each other's switches.
+    """
+    one = MockConfigEntry(domain=DOMAIN, unique_id="user@example.com")
+    again = MockConfigEntry(domain=DOMAIN, unique_id="user@example.com")
+    other = MockConfigEntry(domain=DOMAIN, unique_id="other@example.com")
+
+    assert account_key(one) == account_key(again)
+    assert account_key(one) != account_key(other)
+    assert "@" not in account_key(one)

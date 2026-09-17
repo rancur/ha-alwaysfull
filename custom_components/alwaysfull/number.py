@@ -25,12 +25,17 @@ round-trip loses whatever did not divide evenly.
 
 That is not hypothetical. The bowl this integration was built against
 reports `filterCanUseTime: 10512000`, which is exactly 4 x 2628000 --
-four months of 365/12 days. The vendor's app reads with
+four months of 365/12 days. The DECOMPILED VENDOR ANDROID APP, version
+1.2.29 (the `appVersion` this client sends), reads with
 `Math.floor(filterCanUseTime / 2592e3)` and writes `30 * months * 24 * 60
 * 60`, i.e. a 30-DAY month, so it displays 4 and, on a save that changed
 nothing, writes 10368000. The device was provisioned with one month length
 and the app saves with another, and the filter lifetime quietly loses 1.67
 days every time someone opens that screen and presses save.
+
+The app and its version are named precisely so a later reader can go and
+look at the same thing, rather than having to take a bare "verified" on
+trust from someone who is no longer here to ask.
 
 `SECONDS_PER_MONTH` stays 2592000: being faithful to the vendor's
 arithmetic is right for a real change, because their server and their app

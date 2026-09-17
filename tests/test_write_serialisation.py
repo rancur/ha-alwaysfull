@@ -53,9 +53,9 @@ from custom_components.alwaysfull.exceptions import AlwaysFullError
 
 from .conftest import (
     DEVICE_ID,
-    ENTRY_UNIQUE_ID,
     FakeAlwaysFullClient,
     entity_id_for,
+    entity_id_for_key,
     setup_platforms,
 )
 
@@ -90,13 +90,13 @@ def number_call(hass: HomeAssistant, key: str, value: float) -> asyncio.Task[Non
     )
 
 
-def switch_call(hass: HomeAssistant, unique_id: str) -> asyncio.Task[None]:
+def switch_call(hass: HomeAssistant, entity_id: str) -> asyncio.Task[None]:
     """Start one `switch.turn_on`."""
     return asyncio.create_task(
         hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TURN_ON,
-            {ATTR_ENTITY_ID: entity_id_for(hass, SWITCH_DOMAIN, unique_id)},
+            {ATTR_ENTITY_ID: entity_id},
             blocking=True,
         )
     )
@@ -118,7 +118,7 @@ async def test_writes_on_different_platforms_do_not_overlap(
 
     writes = [
         number_call(hass, "flush_interval", 30),
-        switch_call(hass, f"{DEVICE_ID}_sleep_mode"),
+        switch_call(hass, entity_id_for(hass, SWITCH_DOMAIN, f"{DEVICE_ID}_sleep_mode")),
     ]
     await drain()
 
@@ -151,7 +151,7 @@ async def test_an_account_level_save_takes_the_same_lock(
     mock_api.write_gate = gate
 
     writes = [
-        switch_call(hass, f"{ENTRY_UNIQUE_ID}_alert_tilted"),
+        switch_call(hass, entity_id_for_key(hass, SWITCH_DOMAIN, "_alert_tilted")),
         number_call(hass, "flush_interval", 30),
     ]
     await drain()
@@ -206,7 +206,7 @@ async def test_a_refused_account_save_releases_the_lock(
     mock_api.write_error = AlwaysFullError("Account suspended")
 
     with pytest.raises(HomeAssistantError, match="Account suspended"):
-        await switch_call(hass, f"{ENTRY_UNIQUE_ID}_alert_tilted")
+        await switch_call(hass, entity_id_for_key(hass, SWITCH_DOMAIN, "_alert_tilted"))
 
     assert not entry.runtime_data.write_lock.locked()
 

@@ -249,6 +249,37 @@ def test_to_water_payload_exact_key_set():
     assert set(payload) == {"device_id", "dayMinWater", "dayMaxWater", "units"}
 
 
+def test_no_payload_carries_a_none_for_the_committed_fixture():
+    # `api.py` strips None from a body BEFORE signing it, so a payload
+    # value of None is not sent as JSON null -- the key vanishes, and the
+    # whole-object write silently becomes the partial write that the
+    # ConfigGroup design exists to prevent. Latent today (the live capture
+    # fills all six optional fields), which is exactly why it needs a test:
+    # a future field defaulting to None would ship a partial with nothing
+    # red.
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payloads = {
+        "flush": cfg.to_flush_payload("DEV"),
+        "sleep": cfg.to_sleep_payload("DEV"),
+        "filter": cfg.to_filter_payload("DEV"),
+        "maintenance": cfg.to_maintenance_payload("DEV"),
+        "water": cfg.to_water_payload("DEV", units=1),
+        "log": cfg.to_log_payload("DEV"),
+    }
+    for group, payload in payloads.items():
+        for key, value in payload.items():
+            assert value is not None, f"{group}: {key} is None and would be dropped on the wire"
+
+
+def test_a_none_field_would_be_dropped_from_the_signed_body():
+    # Negative control for the test above: this is what the transport does
+    # to a None, so the rule being asserted is a real one and not a
+    # stylistic preference.
+    body = {"devNo": "DEV", "cleanCycle": 3600, "cleanTime": None}
+    stripped = {key: value for key, value in body.items() if value is not None}
+    assert "cleanTime" not in stripped
+
+
 def test_to_log_payload_exact_key_set():
     # logConfig carries one setting, and it is still a whole-object write.
     cfg = BowlConfig.from_api(fx("device_config.json"))

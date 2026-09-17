@@ -10,6 +10,8 @@ device reports no error for.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from homeassistant.components.number import (
     ATTR_VALUE,
@@ -18,19 +20,21 @@ from homeassistant.components.number import (
 from homeassistant.components.number import (
     DOMAIN as NUMBER_DOMAIN,
 )
-from homeassistant.const import ATTR_ENTITY_ID, Platform
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import snapshot_platform
 from syrupy.assertion import SnapshotAssertion
 
+from custom_components.alwaysfull.const import DOMAIN
 from custom_components.alwaysfull.exceptions import AlwaysFullError
 
 from .conftest import (
     DEVICE_ID,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
+    device_row,
     load_fixture_data,
     only_write,
     setup_platform,
@@ -50,6 +54,12 @@ DAY_MAX = 7500
 
 SECONDS_PER_MONTH = 2592000
 SECONDS_PER_DAY = 86400
+
+
+def entry_coordinator(hass: HomeAssistant) -> Any:
+    """Return the one loaded entry's coordinator."""
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+    return entry.runtime_data
 
 
 async def _set(hass: HomeAssistant, entity_id: str, value: float) -> None:
@@ -423,3 +433,56 @@ async def test_a_real_change_to_those_two_still_converts(
     assert only_write(mock_api, "set_maintenance_config")["deviceCanUseTime"] == (
         7 * SECONDS_PER_DAY
     )
+
+
+async def test_the_daily_threshold_unit_follows_a_units_change_on_the_bowl(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Switching the bowl to fluid ounces relabels the threshold boxes.
+
+    The same defect Task 6 fixed on the sensor platform, and the harm here
+    is worse than a wrong label: these boxes are WRITABLE, and the value
+    goes to the vendor in whatever unit the bowl is on. An owner who flips
+    the units select and then types 60 into a box still saying `mL` has
+    just set a 60 fluid-ounce threshold while reading `mL` off the screen.
+
+    Delete `_handle_coordinator_update` and this stays `mL`: the unit is
+    read once at construction and never again.
+    """
+    await setup_platform(hass, Platform.NUMBER)
+    before = hass.states.get(f"{WALL}daily_minimum_water")
+    assert before.attributes["unit_of_measurement"] == "mL"
+
+    mock_api.device_rows_override = [device_row(units=2)]
+    await entry_coordinator(hass).async_refresh()
+    await hass.async_block_till_done()
+
+    after = hass.states.get(f"{WALL}daily_minimum_water")
+    assert after is not None
+    assert after.attributes["unit_of_measurement"] == "fl. oz."
+    # The stored number is the bowl's own, unconverted: the vendor keeps
+    # these thresholds in whatever unit the bowl is set to.
+    assert float(after.state) == DAY_MIN
+
+
+async def test_a_dropped_bowl_keeps_its_last_known_unit(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A poll that no longer lists this bowl must not blank the unit.
+
+    Blanking it would make Home Assistant treat the recorder history as a
+    unit change. The re-sync only fires for a poll that actually found the
+    bowl, so the entity goes unavailable with its unit intact.
+    """
+    await setup_platform(hass, Platform.NUMBER)
+    assert hass.states.get(f"{WALL}daily_minimum_water").attributes[
+        "unit_of_measurement"
+    ] == "mL"
+
+    mock_api.device_rows_override = [device_row(SECOND_DEVICE_ID)]
+    await entry_coordinator(hass).async_refresh()
+    await hass.async_block_till_done()
+
+    gone = hass.states.get(f"{WALL}daily_minimum_water")
+    assert gone.state == STATE_UNAVAILABLE
+    assert gone.attributes["unit_of_measurement"] == "mL"

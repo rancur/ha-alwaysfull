@@ -18,6 +18,7 @@ old value.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -33,6 +34,7 @@ from .exceptions import AlwaysFullError
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from homeassistant.config_entries import ConfigEntry
     from homeassistant.helpers.entity import EntityDescription
 
     from .api import AlwaysFullClient
@@ -96,6 +98,32 @@ LOG_GROUP = ConfigGroup(
     build=lambda config, device_id, _bowl: config.to_log_payload(device_id),
     send=lambda client, payload: client.set_log_config(**payload),
 )
+
+
+def account_key(entry: ConfigEntry) -> str:
+    """Return a short, stable, NON-IDENTIFYING key for this entry's account.
+
+    The account-level entities have to be keyed on something, and the
+    entry's unique id is the right thing to derive it from: the config
+    flow sets it to the account, so it survives a remove-and-re-add, where
+    `entry_id` does not and would orphan the user's history every time.
+
+    It must not BE that value, though, because the entry's unique id is the
+    account's email address. Unique ids and device identifiers are copied
+    verbatim into a diagnostics download, and diagnostics downloads get
+    pasted into public issue trackers by users who have no idea there is an
+    address in them. A truncated SHA-256 keeps every property that matters
+    -- stable across restarts and re-adds, distinct per account, derived
+    from nothing else -- and carries no address. Twelve hex characters is
+    48 bits, which is not a collision risk across the handful of accounts
+    one Home Assistant will ever hold.
+
+    Not a security control: an email address is guessable, so this is not
+    claimed to be irreversible. It is here so that the address is not
+    sitting in plain text in a file people share.
+    """
+    account = entry.unique_id or entry.entry_id
+    return hashlib.sha256(account.encode()).hexdigest()[:12]
 
 
 class AlwaysFullEntity(CoordinatorEntity[AlwaysFullCoordinator]):
@@ -236,11 +264,7 @@ class AlwaysFullAccountEntity(CoordinatorEntity[AlwaysFullCoordinator]):
         """Bind this entity to the account and one entity description."""
         super().__init__(coordinator)
         self.entity_description = description
-        entry = coordinator.config_entry
-        # The config flow sets the entry's unique id to the account, which
-        # survives a remove-and-re-add; the entry id does not, and keying
-        # on it would orphan the user's history every time.
-        account = entry.unique_id or entry.entry_id
+        account = account_key(coordinator.config_entry)
         self._attr_unique_id = f"{account}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"account_{account}")},

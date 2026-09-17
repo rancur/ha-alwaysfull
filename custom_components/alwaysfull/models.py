@@ -418,10 +418,13 @@ class BowlConfig:
     def to_log_payload(self, device_id: str) -> dict[str, Any]:
         """Whole-object payload for `set_log_config` (`/app/device/logConfig`).
 
-        `logState` is the only setting this endpoint carries -- VERIFIED
-        against the vendor's decompiled app, which posts `{...e, devNo}`
-        where the entity carries nothing but `logState`, rather than
-        inferred from the capture. So "whole object" and "just this field"
+        `logState` is the only setting this endpoint carries. Read out of
+        the DECOMPILED VENDOR ANDROID APP, version 1.2.29 -- the
+        `appVersion` this client sends -- where the call is
+        `J.post(Ne, {...e, devNo})` and the entity spread into it carries
+        nothing but `logState`. Stated that way rather than as a bare
+        "verified" because nobody reading this later can re-check a claim
+        that does not say what was looked at. So "whole object" and "just this field"
         are identical TODAY. It is still built here rather than inline at
         the call site, so that the day the vendor adds a second field to
         the group there is one place to add it and every caller picks it

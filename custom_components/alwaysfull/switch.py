@@ -17,8 +17,19 @@ alert spelt differently in one place is an automation that silently never
 fires, and a list that lost an entry is an alert the user cannot reach at
 all.
 
-Every flag on this vendor's wire is an INT. `True` serialises as JSON
-`true`, which is not what the server stores, so each `set_fn` writes 1/0.
+The vendor's wire is not consistent about how a flag is spelled, and each
+`set_fn` matches the field it writes rather than a rule:
+
+- The per-bowl DEVICE-CONFIG flags (`fillWashState`, `sleepState`,
+  `logState`) are INTS. `True` would serialise as JSON `true`, which is
+  not what the server stores and which changes the signed body, so those
+  setters write 1/0.
+- The account-level notification flags `isTextNotify` / `isEmailNotify`
+  are ints too, for the same reason.
+- But `enabled`, inside `notifyItems` / `notifyList`, is a real JSON
+  BOOLEAN in the capture (`"enabled": false`), so `_set_alert_enabled`
+  writes a Python bool. That is not an exception to a rule being broken
+  here; it is the field's actual type.
 """
 
 from __future__ import annotations
