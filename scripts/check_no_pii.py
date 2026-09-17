@@ -27,9 +27,16 @@ why this runs on every push and not once a release.
 WHAT IT LOOKS FOR
 -----------------
 
-Five rules, each with an allowlist and each allowlist entry carrying a
+Seven rules, each with an allowlist and each allowlist entry carrying a
 reason. An allowlist without reasons decays into "whatever was failing the
 day someone was in a hurry".
+
+Two of them -- `street-address` and `zip-state` -- guard against something
+this repository has never contained: the account holder's postal address,
+which the vendor's `/app/user/loginInfo` endpoint hands out in plain text
+to anyone holding the account's token. That endpoint is deliberately not
+called (see `api.py`), so these rules are a trap set before the mistake,
+not a fix after it.
 
 THIS FILE EXCLUDES ITSELF from the scan, at every path and in every
 historical blob. It has to: it necessarily contains examples of the things
@@ -199,6 +206,123 @@ def _word_digest(word: str) -> str:
     """Return the truncated digest this guard compares tokens against."""
     return hashlib.sha256(word.lower().encode()).hexdigest()[:WORD_DIGEST_LENGTH]
 
+
+# ---------------------------------------------------------------------------
+# Postal addresses
+# ---------------------------------------------------------------------------
+
+# The vendor's `/app/user/loginInfo` endpoint returns the account holder's
+# `address1`, `address2`, `city`, `st` and `zip`. This integration does not
+# call it (see `api.py`) and `diagnostics.TO_REDACT` covers those fields
+# pre-emptively -- but a redaction set only protects the diagnostics file.
+# Nothing stopped a home address reaching this repository as a captured
+# fixture, a pasted log line or a commit message, and until these rules
+# existed nothing would have noticed.
+#
+# As with the device id and the owner's name, the real address is NOT
+# written here. The rule is inverted instead: address-SHAPED text is a
+# finding unless it is one of the obviously synthetic addresses below.
+
+# Written in full and abbreviated, because both spellings occur and a
+# person pasting an address uses whichever their post office does.
+STREET_TYPE_WORDS = (
+    "Street",
+    "Road",
+    "Drive",
+    "Avenue",
+    "Lane",
+    "Boulevard",
+    "Court",
+    "Circle",
+    "Place",
+    "Terrace",
+    "Way",
+)
+
+# Matched CASE-SENSITIVELY, unlike the words above, and that asymmetry is
+# the whole reason this rule is usable. Every entry here is also an
+# ordinary English abbreviation -- `St` is Saint, `Dr` is Doctor, `Ct` and
+# `Pl` and `Cir` turn up in identifiers -- so matching them case-
+# insensitively would fire on "version 2 dr" and a hundred similar
+# fragments of honest prose and snapshot data. Requiring the capitalised
+# spelling costs a lowercased address and buys a rule nobody switches off.
+STREET_TYPE_ABBREVIATIONS = (
+    "St",
+    "Rd",
+    "Dr",
+    "Ave",
+    "Ln",
+    "Blvd",
+    "Ct",
+    "Cir",
+    "Pl",
+)
+
+# One to four tokens of street name between the house number and the street
+# type. Four covers "N 79th Frontage Rd"; requiring at least one is what
+# keeps "Task 2 Way" -- a number immediately followed by a street type --
+# from being read as an address.
+_STREET_NAME_TOKENS = r"(?:[A-Za-z0-9][A-Za-z0-9.'-]*[ \t]+){1,4}"
+
+ALLOWED_ADDRESSES = {
+    "1 test street": (
+        "The synthetic address in tests/test_diagnostics.py, which feeds a "
+        "loginInfo-shaped payload through the diagnostics path to prove the "
+        "postal fields are redacted. It has to be address-SHAPED or it would "
+        "not exercise the thing it exists to exercise."
+    ),
+}
+
+# The 50 states, DC and the inhabited territories, uppercase. Membership is
+# what makes the ZIP rule quiet: `12345` on its own is a line number, an id
+# or a capacity, and only a state code beside it makes it an address.
+US_STATE_ABBREVIATIONS = (
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI",
+    "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN",
+    "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
+    "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
+    "WV", "WI", "WY", "AS", "GU", "MP", "PR", "VI",
+)
+
+US_STATE_NAMES = (
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
+    "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
+    "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Tennessee", "Texas", "Utah",
+    "Vermont", "Virginia", "Washington", "Wisconsin", "Wyoming",
+)
+
+# The multi-word state names, kept separate only because they have to be
+# spelled with their spaces.
+US_STATE_NAMES_MULTIWORD = (
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "North Dakota",
+    "Rhode Island",
+    "South Carolina",
+    "South Dakota",
+    "West Virginia",
+    "District of Columbia",
+    "Puerto Rico",
+)
+
+ALLOWED_ZIP_STATE_PAIRS: dict[str, str] = {
+    # Empty on purpose. No test needs a state/ZIP pair -- the diagnostics
+    # test's `st` and `zip` values are sentinels, not plausible ones --
+    # so there is nothing legitimate for this to permit yet. An entry here
+    # should cost somebody a sentence explaining why.
+}
+
+
+def _normalise_address(value: str) -> str:
+    """Collapse an address to the form the allowlists are compared against."""
+    return " ".join(value.lower().replace(",", " ").split()).rstrip(".")
+
 # ---------------------------------------------------------------------------
 # 32-hex tokens
 # ---------------------------------------------------------------------------
@@ -305,6 +429,30 @@ class HashedWordRule(Rule):
         return "*" * len(value)
 
 
+class PostalAddressRule(Rule):
+    """A rule whose allowlist is compared after normalising punctuation.
+
+    `1 Test Street`, `1 test street,` and `1  Test  Street.` are the same
+    address, so they are compared as the same address.
+    """
+
+    def permits(self, value: str) -> bool:
+        """Allow only the synthetic addresses, however they were punctuated."""
+        return _normalise_address(value) in self.allowed
+
+    def mask(self, value: str) -> str:
+        """Redact the finding ENTIRELY, like the name rule and unlike the rest.
+
+        `_mask` keeps the first three characters, which is right for a MAC:
+        enough for the owner to recognise it, useless to a reader. It is
+        wrong for an address, where the first three characters are most of
+        the house number -- the one part of an address a person would
+        actually have to guess. The rule name, the file and the line number
+        locate it just as well, and they are not somebody's doorstep.
+        """
+        return "*" * len(value)
+
+
 RULES: tuple[Rule, ...] = (
     EmailRule(
         name="email",
@@ -371,6 +519,46 @@ RULES: tuple[Rule, ...] = (
         ),
         why="twelve hex characters, which is the shape of this device's MAC address",
         allowed=frozenset({*SYNTHETIC_DEVICE_IDS, DERIVED_ACCOUNT_KEY}),
+    ),
+    PostalAddressRule(
+        name="street-address",
+        # A house number, one to four words of street name, then a street
+        # type. The full words are matched case-insensitively with an
+        # inline scoped flag; the abbreviations, which are also ordinary
+        # English words, only in their capitalised spelling -- see
+        # `STREET_TYPE_ABBREVIATIONS` for why that trade is worth making.
+        #
+        # The trailing guard is `\b` and no more. Adding `.` to it would
+        # miss an address at the END OF A SENTENCE, which is exactly the
+        # mistake the RFC1918 rule above already made once and the single
+        # most likely way an address gets written into a commit message.
+        #
+        # `[ \t]` rather than `\s`: `_scan` works line by line, so a `\s`
+        # that could match a newline would only ever be a way to join two
+        # unrelated lines into a false finding.
+        pattern=re.compile(
+            rf"(?<![\d.])\d{{1,6}}[A-Za-z]?[ \t]+{_STREET_NAME_TOKENS}"
+            rf"(?:(?i:{'|'.join(STREET_TYPE_WORDS)})|(?:{'|'.join(STREET_TYPE_ABBREVIATIONS)}))"
+            r"\b"
+        ),
+        why="a street address, which is somebody's front door",
+        allowed=frozenset(ALLOWED_ADDRESSES),
+    ),
+    PostalAddressRule(
+        name="zip-state",
+        # A US state -- spelled out or as its uppercase two-letter code --
+        # immediately before a five-digit ZIP, with an optional comma and
+        # an optional +4. Five digits ALONE is not a finding: this
+        # repository is full of capacities, ids and timestamps of that
+        # length, and a rule that flagged them would be noise within a day.
+        # The state code beside them is what makes it an address.
+        pattern=re.compile(
+            r"\b(?:"
+            + "|".join((*US_STATE_NAMES_MULTIWORD, *US_STATE_NAMES, *US_STATE_ABBREVIATIONS))
+            + r")\.?,?[ \t]+\d{5}(?:-\d{4})?\b"
+        ),
+        why="a US state beside a ZIP code, which is the tail of a postal address",
+        allowed=frozenset(ALLOWED_ZIP_STATE_PAIRS),
     ),
     HashedWordRule(
         name="owner-name",
