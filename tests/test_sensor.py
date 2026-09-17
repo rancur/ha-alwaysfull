@@ -21,6 +21,7 @@ from custom_components.alwaysfull.const import ALERT_TYPES
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
 from custom_components.alwaysfull.sensor import (
     ALERT_TYPE_OPTIONS,
+    ATTR_RAW_SLAVE_TYPE,
     ATTR_RAW_TYPE,
     SENSORS,
     UNKNOWN,
@@ -104,6 +105,43 @@ async def test_water_today_is_shown_in_fluid_ounces_under_us_customary(
     assert wall.attributes["unit_of_measurement"] == "fl. oz."
     assert pump.state == "250"
     assert pump.attributes["unit_of_measurement"] == "fl. oz."
+
+
+async def test_water_today_unit_follows_a_units_change_between_polls(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Flipping `units` on the bowl moves the sensor's NATIVE unit.
+
+    `units` is writable (Task 8 exposes it), so a user switching the bowl
+    between millilitres and fluid ounces mid-session is a real scenario,
+    not a hypothetical. Without the re-sync on the update path the entity
+    would keep the unit it was constructed with and silently report fluid
+    ounces as though they were millilitres.
+
+    The harm is mislabelling, not arithmetic: the vendor keeps sending the
+    same daily total, and if the unit does not follow, 903 fluid ounces is
+    presented to the user as 903 millilitres -- a thirty-fold error in what
+    they read, with no error anywhere to notice.
+
+    Verified against the installed Home Assistant rather than assumed: this
+    entity stored no display-unit option (its native unit already matched
+    the metric system when it was created), so its displayed unit follows
+    its native unit. Delete the re-sync on the update path and this stays
+    `mL`.
+    """
+    entry = await setup_platform(hass, Platform.SENSOR)
+    before = hass.states.get(f"{WALL}water_today")
+    assert before.state == "903"
+    assert before.attributes["unit_of_measurement"] == "mL"
+
+    mock_api.device_rows_override = [device_row(units=2)]
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(f"{WALL}water_today")
+    assert state is not None
+    assert state.attributes["unit_of_measurement"] == "fl. oz."
+    assert state.state == "903"
 
 
 async def test_water_today_is_unknown_when_today_has_no_row_yet(
@@ -196,7 +234,13 @@ async def test_water_source_enum(
     state = hass.states.get(f"{WALL}water_source")
     assert state is not None
     assert state.state == expected
-    assert expected in state.attributes["options"]
+    # The FULL list, not just membership: an accidental extra or renamed
+    # option passes a membership check while breaking every automation and
+    # every translated label that depends on it.
+    assert state.attributes["options"] == ["none", "bottle_pump", "wall_unit", "unknown"]
+    # The vendor's own value, so an unrecognised source is distinguishable
+    # from a bowl that is simply not reporting.
+    assert state.attributes[ATTR_RAW_SLAVE_TYPE] == slave_type
 
 
 @pytest.mark.parametrize(
@@ -293,7 +337,19 @@ async def test_last_alert_normalises_and_keeps_the_raw_vendor_string(
     state = hass.states.get(f"{WALL}last_alert")
     assert state is not None
     assert state.state == expected
-    assert state.state in state.attributes["options"]
+    assert state.attributes["options"] == [
+        "tilted",
+        "daily_maximum",
+        "fill_failed",
+        "not_attached",
+        "high_water_level",
+        "replace_wall_filter",
+        "replace_bowl_filter",
+        "daily_decreased",
+        "operation_confirmation",
+        "hardware_fault",
+        "unknown",
+    ]
     assert state.attributes[ATTR_RAW_TYPE] == vendor_type
 
 

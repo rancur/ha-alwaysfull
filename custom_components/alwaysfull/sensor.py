@@ -59,6 +59,11 @@ if TYPE_CHECKING:
 # labels anything outside its enum "Unknown" too.
 UNKNOWN = "unknown"
 
+# Read-only platform: nothing here talks to the device, every value comes
+# from one shared coordinator poll. Declared explicitly because the
+# integration quality scale expects it stated rather than inferred.
+PARALLEL_UPDATES = 0
+
 WATER_SOURCE_OPTIONS = {
     SLAVE_TYPE_NONE: "none",
     SLAVE_TYPE_BOTTLE_PUMP: "bottle_pump",
@@ -89,10 +94,14 @@ ALERT_TYPE_OPTIONS = {
     "Hardware_Fault": "hardware_fault",
 }
 
-# The attribute carrying the vendor's untouched `type` string, including for
-# an alert type this integration does not know yet: a user can match on it
-# the day the vendor ships a new one, without waiting for us.
+# Attributes carrying the vendor's untouched value behind a normalised enum
+# state, including for a value this integration does not know yet: a user
+# can match on it the day the vendor ships a new one, without waiting for us.
+# Without these, an unrecognised value is indistinguishable from no value at
+# all, because Home Assistant renders the `unknown` OPTION exactly like a
+# missing state.
 ATTR_RAW_TYPE = "raw_type"
+ATTR_RAW_SLAVE_TYPE = "raw_slave_type"
 
 
 def _wall_unit_only(
@@ -184,6 +193,11 @@ def _last_alert_attributes(bowl: BowlData) -> dict[str, Any]:
     return {ATTR_RAW_TYPE: None if row is None else row.get("type")}
 
 
+def _water_source_attributes(bowl: BowlData) -> dict[str, Any]:
+    """Return the vendor's own `slaveType` int for this bowl."""
+    return {ATTR_RAW_SLAVE_TYPE: bowl.state.slave_type}
+
+
 def _water_unit(bowl: BowlData) -> str:
     """Return the bowl's own volume unit (`units`: 1 = mL, 2 = fl oz)."""
     if bowl.state.units == UNITS_FLUID_OUNCES:
@@ -244,13 +258,17 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         options=[*WATER_SOURCE_OPTIONS.values(), UNKNOWN],
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda bowl: WATER_SOURCE_OPTIONS.get(bowl.state.slave_type, UNKNOWN),
+        attributes_fn=_water_source_attributes,
     ),
     AlwaysFullSensorEntityDescription(
         key="last_alert",
         translation_key="last_alert",
         device_class=SensorDeviceClass.ENUM,
         options=[*ALERT_TYPE_OPTIONS.values(), UNKNOWN],
-        entity_category=EntityCategory.DIAGNOSTIC,
+        # Deliberately NOT diagnostic. This is the entity that says what
+        # actually went wrong with the bowl, and Home Assistant collapses
+        # diagnostic entities by default -- which would bury the one reading
+        # the owner most wants to see.
         value_fn=_last_alert,
         attributes_fn=_last_alert_attributes,
     ),

@@ -33,6 +33,12 @@ if TYPE_CHECKING:
     from .coordinator import AlwaysFullConfigEntry, BowlData
 
 
+# Read-only platform: nothing here talks to the device, every value comes
+# from one shared coordinator poll. Declared explicitly because the
+# integration quality scale expects it stated rather than inferred.
+PARALLEL_UPDATES = 0
+
+
 def _filter_fault(bowl: BowlData) -> bool | None:
     """Return whether the filter is faulted, or `None` on a non-wall unit.
 

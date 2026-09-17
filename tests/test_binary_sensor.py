@@ -65,11 +65,23 @@ async def test_alarm_fields(
     assert state.state == expected
 
 
+@pytest.mark.parametrize(
+    "row",
+    [
+        pytest.param({"systemSuspended": 1, "hardwareFailure": 0}, id="suspended_only"),
+        pytest.param({"systemSuspended": 0, "hardwareFailure": 1}, id="hardware_only"),
+    ],
+)
 async def test_system_problem_takes_either_field(
-    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, row: dict[str, int]
 ) -> None:
-    """Both fields feed one problem sensor, and neither masks the other."""
-    mock_api.device_rows_override = [device_row(systemSuspended=1, hardwareFailure=1)]
+    """EITHER field alone raises the problem; neither masks the other.
+
+    Deliberately one field at a time. Setting both would make `or` and
+    `and` produce the same ON, which is a test that cannot fail -- the
+    exact failure mode this project has already shipped three times.
+    """
+    mock_api.device_rows_override = [device_row(**row)]
     await setup_platform(hass, Platform.BINARY_SENSOR)
 
     state = hass.states.get(f"{WALL}system_problem")
