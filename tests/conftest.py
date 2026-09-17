@@ -148,7 +148,12 @@ class FakeAlwaysFullClient:
         # fault, a day with no drinking row yet) without editing a fixture
         # that other tests assert against.
         self.device_rows_override: list[dict[str, Any]] | None = None
-        self.notify_rows_override: list[dict[str, Any]] | None = None
+        # Either one list served to EVERY device, or a {device_id: rows}
+        # mapping so a test can give each bowl its own alerts -- which is
+        # what proves an alert lands on the bowl that raised it.
+        self.notify_rows_override: (
+            list[dict[str, Any]] | dict[str, list[dict[str, Any]]] | None
+        ) = None
         self.drinking_rows_override: list[dict[str, Any]] | None = None
 
         # Per-device drinking totals, so a multi-device test can prove each
@@ -221,11 +226,21 @@ class FakeAlwaysFullClient:
         ]
 
     async def notify_log(self, device_id: str, page_size: int = 20) -> Any:
-        """Return the paginated notification-log envelope from the fixtures."""
+        """Return the paginated notification-log envelope from the fixtures.
+
+        The committed capture is one device's log, and it is served for
+        WHICHEVER device is asked for -- deliberately, because that is the
+        shape a server ignoring its `deviceId` parameter would produce, and
+        the coordinator is what has to notice. A test that wants each bowl
+        to have its own alerts passes a `{device_id: rows}` mapping.
+        """
         self.notify_log_calls.append(device_id)
         envelope = copy.deepcopy(load_fixture_data("notify_log"))
-        if self.notify_rows_override is not None:
-            envelope["data"] = copy.deepcopy(self.notify_rows_override)
+        override = self.notify_rows_override
+        if isinstance(override, dict):
+            envelope["data"] = copy.deepcopy(override.get(device_id, []))
+        elif override is not None:
+            envelope["data"] = copy.deepcopy(override)
         return envelope
 
     async def notify_config(self) -> Any:

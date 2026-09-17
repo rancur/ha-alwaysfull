@@ -222,7 +222,9 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 state=state,
                 config=BowlConfig.from_api(await self.client.device_config(device_id) or {}),
                 water_today=await self._async_water_today(device_id, state.units, today),
-                notifications=(await self.client.notify_log(device_id) or {}).get("data") or [],
+                notifications=self._notifications_for(
+                    device_id, (await self.client.notify_log(device_id) or {}).get("data") or []
+                ),
                 raw=row,
             )
 
@@ -231,6 +233,31 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         self._poll_count += 1
 
         return data
+
+    @staticmethod
+    def _notifications_for(device_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop any notify-log row that names a DIFFERENT device.
+
+        `notify/log` is requested per device and the live capture answers
+        with only that device's rows, so on the vendor's current behaviour
+        this changes nothing. It is here because the cost of being wrong is
+        asymmetric: if the endpoint ever ignores its `deviceId` parameter --
+        or starts ignoring it after a server-side change nobody tells us
+        about -- an owner with two bowls gets every alert duplicated on both
+        bowls' entities, with the second bowl's alert entity firing
+        automations for a bowl in another room.
+
+        A row with NO `deviceId` is kept. We asked this endpoint for this
+        device; an absent field is not evidence that the row belongs to
+        another one, and discarding it would lose a real alert.
+        """
+        return [
+            row
+            for row in rows
+            if not isinstance(row, dict)
+            or row.get("deviceId") is None
+            or row.get("deviceId") == device_id
+        ]
 
     async def _async_water_today(self, device_id: str, units: int, today: str) -> int | None:
         """Return today's total consumption, or `None` if the day is missing.

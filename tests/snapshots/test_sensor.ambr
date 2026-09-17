@@ -236,14 +236,14 @@
         'hardware_fault',
         'unknown',
       ]),
-      'raw_type': 'Operation_Confirmation',
+      'raw_type': None,
     }),
     'context': <ANY>,
     'entity_id': 'sensor.second_bowl_last_alert',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
-    'state': 'operation_confirmation',
+    'state': 'unknown',
   })
 # ---
 # name: test_all_sensor_entities[sensor.second_bowl_water_source-entry]

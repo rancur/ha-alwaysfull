@@ -92,7 +92,13 @@ ALERT_TYPE_OPTIONS = {
 # Everything an alert can be reported as: the ten known options plus the
 # fallback. The sensor publishes this as its enum `options` and the event
 # entity as its `event_types`, so the two can never disagree.
-ALERT_OPTIONS = [*ALERT_TYPE_OPTIONS.values(), UNKNOWN]
+#
+# A TUPLE, and each platform is handed its own `list(...)` copy. Home
+# Assistant wants a list in both places, and one shared list handed to two
+# entity descriptions is a mutable global that anything holding a reference
+# could reorder or extend for both platforms at once. Nothing does that
+# today; this removes the possibility rather than relying on nobody trying.
+ALERT_OPTIONS = (*ALERT_TYPE_OPTIONS.values(), UNKNOWN)
 
 # The vendor's untouched `type` string, carried alongside the normalised
 # value by every entity that normalises it. Without it, an alert type the

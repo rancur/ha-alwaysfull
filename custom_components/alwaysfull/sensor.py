@@ -239,7 +239,7 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         key="last_alert",
         translation_key="last_alert",
         device_class=SensorDeviceClass.ENUM,
-        options=ALERT_OPTIONS,
+        options=list(ALERT_OPTIONS),
         # Deliberately NOT diagnostic. This is the entity that says what
         # actually went wrong with the bowl, and Home Assistant collapses
         # diagnostic entities by default -- which would bury the one reading

@@ -81,13 +81,35 @@ ALERT_EVENTS: tuple[EventEntityDescription, ...] = (
         translation_key="alert",
         # The same options Task 6's `last_alert` sensor reports, from the
         # same mapping, so one automation spelling works against both.
-        event_types=ALERT_OPTIONS,
+        event_types=list(ALERT_OPTIONS),
         # NO device class: see the module docstring.
     ),
 )
 
 
-def _chronological(row: dict[str, Any]) -> tuple[str, str]:
+def _id_order(row_id: Any) -> tuple[int, float, str]:
+    """Return a sort key ordering ids NUMERICALLY where they are numbers.
+
+    `str(row_id)` would be simpler and is wrong: ids 999 and 1000 sharing a
+    `createTime` second sort `"1000" < "999"`, so the batch fires newest
+    first and the entity comes to rest on the OLDER of the two alerts. The
+    vendor stamps `createTime` to whole seconds, so two alerts in the same
+    second is an ordinary occurrence, not a corner case.
+
+    Total and exception-free over anything JSON can produce: numbers (and
+    numeric strings) order together and ahead of non-numeric ids, which
+    then order lexicographically among themselves. A tuple whose elements
+    could be an int in one row and a str in another would raise `TypeError`
+    mid-sort -- inside a coordinator listener, which breaks the update for
+    every other entity too.
+    """
+    try:
+        return (0, float(row_id), "")
+    except (TypeError, ValueError):
+        return (1, 0.0, str(row_id))
+
+
+def _chronological(row: dict[str, Any]) -> tuple[str, int, float, str]:
     """Return a sort key that puts the OLDEST alert first.
 
     Ordered by `createTime`, not by id. The ids are server-assigned, and
@@ -96,9 +118,9 @@ def _chronological(row: dict[str, Any]) -> tuple[str, str]:
     when the alert happened, and it costs nothing to use. `createTime` is a
     fixed-width UTC `%Y-%m-%dT%H:%M:%SZ` string, so lexicographic order IS
     chronological order and no parsing (which could raise mid-update) is
-    needed. The id only breaks ties, and only to keep the order stable.
+    needed. The id only breaks ties, and only within one second.
     """
-    return (str(row.get("createTime") or ""), str(row.get("id")))
+    return (str(row.get("createTime") or ""), *_id_order(row.get("id")))
 
 
 async def async_setup_entry(

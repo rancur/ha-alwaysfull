@@ -32,6 +32,7 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import async_capture_events, snapshot_platform
 from syrupy.assertion import SnapshotAssertion
 
+from custom_components.alwaysfull import event as event_module
 from custom_components.alwaysfull.const import (
     ALERT_OPTIONS,
     ALERT_TYPE_OPTIONS,
@@ -46,9 +47,16 @@ from custom_components.alwaysfull.event import (
 )
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
 
-from .conftest import DEVICE_ID, FakeAlwaysFullClient, load_fixture_data, setup_platform
+from .conftest import (
+    DEVICE_ID,
+    SECOND_DEVICE_ID,
+    FakeAlwaysFullClient,
+    load_fixture_data,
+    setup_platform,
+)
 
 ALERT = "event.test_bowl_alert"
+SECOND_ALERT = "event.second_bowl_alert"
 
 # The committed capture: thirteen rows, newest first.
 #
@@ -72,13 +80,14 @@ def alert_row(
     vendor_type: str = "Hardware_Fault",
     created: str = "2026-09-17T01:00:00Z",
     *,
+    device_id: str = DEVICE_ID,
     drop: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Return one synthetic notify-log row, optionally missing some keys."""
     row = {
         "id": row_id,
         "userId": 1001,
-        "deviceId": DEVICE_ID,
+        "deviceId": device_id,
         "type": vendor_type,
         "mark": 1,
         "msg": f"Bowl {DEVICE_ID} raised alert {row_id}.",
@@ -97,7 +106,9 @@ async def poll(
     await hass.async_block_till_done()
 
 
-def fired(events: list[Event], attribute: str = ATTR_EVENT_TYPE) -> list[Any]:
+def fired(
+    events: list[Event], attribute: str = ATTR_EVENT_TYPE, entity_id: str = ALERT
+) -> list[Any]:
     """Return `attribute` from every state change that carried a fired event.
 
     Reading the state-change stream rather than the final state is what
@@ -114,7 +125,7 @@ def fired(events: list[Event], attribute: str = ATTR_EVENT_TYPE) -> list[Any]:
     return [
         event.data["new_state"].attributes.get(attribute)
         for event in events
-        if event.data["entity_id"] == ALERT
+        if event.data["entity_id"] == entity_id
         and event.data["new_state"] is not None
         and event.data["new_state"].state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
         and (
@@ -475,7 +486,7 @@ async def test_declared_event_types_are_the_sensor_options(
         "unknown",
     ]
     # One source of truth: the same mapping Task 6's sensor reports with.
-    assert list(ALERT_TYPE_OPTIONS.values()) == ALERT_OPTIONS[:-1]
+    assert tuple(ALERT_TYPE_OPTIONS.values()) == ALERT_OPTIONS[:-1]
     assert ALERT_OPTIONS[-1] == UNKNOWN
 
 
@@ -492,3 +503,190 @@ def test_the_alert_event_ships_no_device_class() -> None:
     assert {member.value for member in EventDeviceClass} == {"doorbell", "button", "motion"}
     for description in ALERT_EVENTS:
         assert description.device_class is None
+
+
+async def test_an_older_alert_in_a_batch_still_reaches_the_state_machine(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A serious alert must not be swallowed by a chattier one beside it.
+
+    This bowl announces every fill as `Operation_Confirmation` -- nine of
+    the thirteen rows in the live capture are exactly that -- so a
+    `Hardware_Fault` followed a few seconds later by a routine fill is an
+    ORDINARY sequence, not a contrived one. Both land in the same sixty-
+    second poll. If only the newest event reaches the state machine, the
+    automation the owner wrote on `hardware_fault` never runs and nothing
+    anywhere reports an error.
+
+    Deliberately asserts nothing about ORDER, only that the fault is
+    published exactly once. That is what makes this an independent guard
+    rather than the ordering test under another name: it passes unchanged
+    if the firing order is reversed, and fails only if an event goes
+    missing.
+    """
+    entry = await setup_platform(hass, Platform.EVENT)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+    await poll(
+        hass,
+        entry,
+        mock_api,
+        [
+            alert_row(5101, "Operation_Confirmation", "2026-09-17T01:00:09Z"),
+            alert_row(5100, "Hardware_Fault", "2026-09-17T01:00:00Z"),
+            *HISTORY,
+        ],
+    )
+
+    assert fired(events).count("hardware_fault") == 1
+    assert fired(events, ATTR_ALERT_ID).count(5100) == 1
+
+
+async def test_a_string_alert_id_is_deduped_like_any_other(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """An id that arrives as a string still fires once, and only once.
+
+    JSON ids are not guaranteed to stay numeric: a vendor that grows past
+    what a JavaScript `Number` holds exactly, or moves to a UUID, ships
+    them as strings and nothing announces the change. Dedupe is a set
+    lookup, so it does not care -- but any ordering comparison against the
+    ids WOULD care, and would break on the first such row.
+
+    This is the second, non-hypothetical guard on the seen-set: a
+    high-water mark has to compare this row's `"5100"` against the int ids
+    already seen, which raises `TypeError` inside a coordinator listener.
+    """
+    entry = await setup_platform(hass, Platform.EVENT)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+    rows = [alert_row("5100", "Hardware_Fault", "2026-09-17T01:00:00Z"), *HISTORY]
+    await poll(hass, entry, mock_api, rows)
+    await poll(hass, entry, mock_api, rows)
+
+    assert fired(events) == ["hardware_fault"]
+    assert fired(events, ATTR_ALERT_ID) == ["5100"]
+
+
+async def test_two_alerts_in_the_same_second_fire_in_numeric_id_order(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Within one `createTime` second, the lower id is the older alert.
+
+    `createTime` is stamped to whole seconds, so two alerts sharing one is
+    ordinary -- the live capture has a `Tilted` and a `Not_Attached` six
+    seconds apart. Tie-breaking on `str(id)` puts `"10000"` before
+    `"9999"`, which fires the batch backwards and leaves the entity resting
+    on the OLDER alert while looking entirely correct.
+    """
+    entry = await setup_platform(hass, Platform.EVENT)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+    same_second = "2026-09-17T01:00:00Z"
+
+    await poll(
+        hass,
+        entry,
+        mock_api,
+        [
+            alert_row(10000, "Tilted", same_second),
+            alert_row(9999, "Fill_Failed", same_second),
+            *HISTORY,
+        ],
+    )
+
+    assert fired(events, ATTR_ALERT_ID) == [9999, 10000]
+    assert fired(events) == ["fill_failed", "tilted"]
+
+
+async def test_the_dedupe_set_evicts_the_oldest_id_never_the_newest(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bound must forget the OLDEST id, and it must actually bind.
+
+    Both halves are load-bearing and each one alone is vacuous.
+
+    Evicting the newest instead -- which is all that `popitem()` does in
+    place of `pop(next(iter(...)))`, an entirely plausible tidy-up --
+    forgets the id it has just remembered, so every alert on the page
+    re-fires on every poll for ever. That is the pager-every-minute failure
+    coming back through a side door, and only once the set has filled,
+    which on a real bowl is weeks of uptime after the change shipped. The
+    re-presented newest id is what catches it.
+
+    Never evicting at all is the opposite bug and the reason the second
+    half is here: the oldest id must be gone, or this test would pass
+    without the bound ever engaging and prove nothing.
+
+    The cap is monkeypatched down rather than exercised at its real 500,
+    because the property under test is the DIRECTION, not the number.
+    """
+    monkeypatch.setattr(event_module, "MAX_REMEMBERED_ALERT_IDS", 3)
+    mock_api.notify_rows_override = []
+    entry = await setup_platform(hass, Platform.EVENT)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+    rows = {n: alert_row(n, "Tilted", f"2026-09-17T0{n}:00:00Z") for n in (1, 2, 3, 4)}
+
+    # A page of two that rolls forward, so no row is still on the page by
+    # the time its id is evicted -- otherwise it would re-fire legitimately
+    # and this test would be measuring the page size, not the eviction.
+    await poll(hass, entry, mock_api, [rows[1]])
+    await poll(hass, entry, mock_api, [rows[2], rows[1]])
+    await poll(hass, entry, mock_api, [rows[3], rows[2]])
+    await poll(hass, entry, mock_api, [rows[4], rows[3]])
+    assert fired(events, ATTR_ALERT_ID) == [1, 2, 3, 4]
+
+    # The set now holds 2, 3, 4. The id remembered most recently must still
+    # be remembered.
+    await poll(hass, entry, mock_api, [rows[4], rows[3]])
+    assert fired(events, ATTR_ALERT_ID) == [1, 2, 3, 4]
+
+    # And the id remembered longest ago must be the one that was dropped.
+    await poll(hass, entry, mock_api, [rows[4], rows[1]])
+    assert fired(events, ATTR_ALERT_ID) == [1, 2, 3, 4, 1]
+
+
+async def test_each_bowl_fires_only_its_own_alerts(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Two bowls, two entities, and no crosstalk between them.
+
+    The first half is ordinary coverage: the second bowl's entity is a real
+    entity that has to work, not a row in a snapshot.
+
+    The second half is the defensive half. `notify/log` is requested per
+    device, and the live capture answers with only that device's rows -- so
+    the filter is guarding against the vendor ignoring its own `deviceId`
+    parameter, which we have not seen it do. The cost of being wrong is
+    what justifies it: a two-bowl owner would get every alert duplicated
+    onto the other bowl's entity, and an automation that shuts off the
+    water to a tilted bowl would act on the wrong bowl, in the wrong room.
+    """
+    mock_api.notify_rows_override = {DEVICE_ID: [], SECOND_DEVICE_ID: []}
+    entry = await setup_platform(hass, Platform.EVENT)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+    mock_api.notify_rows_override = {
+        DEVICE_ID: [alert_row(5100, "Tilted", "2026-09-17T01:00:00Z")],
+        SECOND_DEVICE_ID: [
+            alert_row(
+                6100,
+                "Hardware_Fault",
+                "2026-09-17T01:00:00Z",
+                device_id=SECOND_DEVICE_ID,
+            )
+        ],
+    }
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    assert fired(events) == ["tilted"]
+    assert fired(events, ATTR_EVENT_TYPE, SECOND_ALERT) == ["hardware_fault"]
+
+    # Now the server ignores `deviceId` and hands bowl ONE's alert to both.
+    await poll(hass, entry, mock_api, [alert_row(5200, "Fill_Failed", "2026-09-17T02:00:00Z")])
+
+    assert fired(events) == ["tilted", "fill_failed"]
+    assert fired(events, ATTR_EVENT_TYPE, SECOND_ALERT) == ["hardware_fault"]

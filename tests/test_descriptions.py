@@ -289,9 +289,12 @@ def test_the_alert_mapping_is_the_only_one() -> None:
     """
     assert set(ALERT_TYPE_OPTIONS) == set(ALERT_TYPES)
     assert "unknown" not in ALERT_TYPE_OPTIONS.values()
-    assert list(ALERT_TYPE_OPTIONS.values()) == ALERT_OPTIONS[:-1]
+    assert tuple(ALERT_TYPE_OPTIONS.values()) == ALERT_OPTIONS[:-1]
     assert ALERT_OPTIONS[-1] == UNKNOWN
 
     last_alert = next(d for d in SENSORS if d.key == "last_alert")
     alert_event = next(d for d in ALERT_EVENTS if d.key == "alert")
-    assert list(last_alert.options) == list(alert_event.event_types) == ALERT_OPTIONS
+    assert tuple(last_alert.options) == tuple(alert_event.event_types) == ALERT_OPTIONS
+    # Each platform holds its OWN list. Handing both the same one would let
+    # anything that reordered or extended it do so for both at once.
+    assert last_alert.options is not alert_event.event_types
