@@ -30,6 +30,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import AlwaysFullCoordinator
 from .exceptions import AlwaysFullError
+from .models import device_label
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -199,16 +200,38 @@ class AlwaysFullEntity(CoordinatorEntity[AlwaysFullCoordinator]):
         every time the integration is removed and re-added; keying the
         device on it would create a brand-new device and orphan every
         recorder history row the user had built up.
+
+        `name` is ALWAYS set, and that is not a tidiness point. Omitting it
+        is not "no name": Home Assistant falls back to the config entry
+        title, and this integration titles the entry with the account's
+        EMAIL ADDRESS. The vendor's `deviceName` is null until somebody
+        renames the bowl in their app, which is the default state and not
+        an edge case, so the common install put the owner's address into
+        the device name and from there into every per-bowl entity id --
+        visible in the UI, written into automations, and in every
+        screenshot and issue report.
+
+        The fallback is `device_label`, the same derivation the diagnostics
+        download and the warning log already use. It keeps the two
+        properties that matter -- identical every time, distinct per bowl,
+        so an owner with two of them can tell which is which -- and it is
+        derived from the device id, so nothing about the account can reach
+        it. One definition, so the name a user sees in the UI is the name
+        their log lines and their diagnostics file use.
         """
         bowl = self.bowl
         info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
             manufacturer=MANUFACTURER,
+            name=device_label(self._device_id),
         )
         if bowl is None:
             return info
-        if bowl.state.device_name:
-            info["name"] = bowl.state.device_name
+        # `.strip()`, because a name of spaces is a name the user cannot
+        # see and would hand Home Assistant the entry title right back.
+        vendor_name = (bowl.state.device_name or "").strip()
+        if vendor_name:
+            info["name"] = vendor_name
         info["model"] = f'{bowl.state.bowl_size_inches}" Bowl'
         if bowl.firmware_version:
             info["sw_version"] = bowl.firmware_version

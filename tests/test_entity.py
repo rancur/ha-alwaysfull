@@ -8,9 +8,11 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityDescription
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.alwaysfull import PLATFORMS
 from custom_components.alwaysfull.const import DOMAIN
 from custom_components.alwaysfull.entity import (
     FILTER_GROUP,
@@ -24,17 +26,40 @@ from custom_components.alwaysfull.entity import (
     ConfigGroup,
 )
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
+from custom_components.alwaysfull.switch import NOTIFY_SWITCHES
 
-from .conftest import DEVICE_ID, FakeAlwaysFullClient, load_fixture_data
+from .conftest import (
+    DEVICE_ID,
+    SECOND_DEVICE_ID,
+    FakeAlwaysFullClient,
+    load_fixture_data,
+    setup_platforms,
+)
 
 DESCRIPTION = EntityDescription(key="filter_life")
 
+# The synthetic account every test here runs as. Its local part and its
+# domain are asserted against separately, because a fallback name built
+# from the entry title would carry them in whatever spelling Home
+# Assistant's slugify produced.
+ACCOUNT_EMAIL = "user@example.com"
+ACCOUNT_PARTS = ("user", "example", "@")
+
 
 async def _load(hass: HomeAssistant) -> MockConfigEntry:
-    """Load one config entry against whatever the fake client is set up to serve."""
+    """Load one config entry against whatever the fake client is set up to serve.
+
+    Titled with the address, because that is what the config flow does
+    (`async_create_entry(title=email)`) and because the entry title is
+    precisely what Home Assistant falls back to when a `DeviceInfo` omits
+    its name. A test entry left on `MockConfigEntry`'s "Mock Title" cannot
+    see that fallback for what it is.
+    """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"email": "user@example.com", "password": "pw", "token": "T"},
+        title=ACCOUNT_EMAIL,
+        unique_id=ACCOUNT_EMAIL,
+        data={"email": ACCOUNT_EMAIL, "password": "pw", "token": "T"},
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -80,6 +105,78 @@ async def test_device_info_is_keyed_on_the_vendor_device_id(
     assert info["model"] == '9" Bowl'
     assert info["sw_version"] == "3.6.2"
     assert info["name"] == "Test Bowl"
+
+
+def _unnamed_rows() -> list[dict[str, Any]]:
+    """Return the committed device rows with the vendor's name removed.
+
+    The DEFAULT state of a bowl nobody renamed in the vendor app, not an
+    edge case: `deviceName` is null until somebody types one in.
+    """
+    rows: list[dict[str, Any]] = load_fixture_data("device_list_multi")["data"]
+    for row in rows:
+        row["deviceName"] = None
+    return rows
+
+
+async def test_device_info_always_carries_a_name_when_the_vendor_has_none(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A bowl with no vendor name must still name itself, and not after the account.
+
+    Omitting `name` from `DeviceInfo` is not neutral: Home Assistant falls
+    back to the config entry title, and this integration titles the entry
+    with the account's EMAIL ADDRESS. So the common case -- a bowl nobody
+    renamed in the vendor app -- put the owner's address into the device
+    name and therefore into every per-bowl entity id, where it shows in the
+    UI, in automations and in any screenshot.
+    """
+    mock_api.device_rows_override = _unnamed_rows()
+    entity = await _entity(hass)
+
+    name = entity.device_info["name"]
+    assert name
+
+    for part in ACCOUNT_PARTS:
+        assert part not in name.lower(), name
+    # And not the entry title by another route: the title IS the address.
+    assert name != entity.coordinator.config_entry.title
+
+
+async def test_two_unnamed_bowls_get_distinct_names(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """An owner with two unnamed bowls must be able to tell them apart.
+
+    A single constant fallback would satisfy "there is a name" and leave
+    both bowls, and both sets of entity ids, indistinguishable -- with the
+    second one's ids silently suffixed `_2` in registration order.
+    """
+    mock_api.device_rows_override = _unnamed_rows()
+    entry = await _load(hass)
+
+    first = AlwaysFullEntity(entry.runtime_data, DEVICE_ID, DESCRIPTION)
+    second = AlwaysFullEntity(entry.runtime_data, SECOND_DEVICE_ID, DESCRIPTION)
+
+    assert first.device_info["name"] != second.device_info["name"]
+
+
+async def test_device_info_names_a_bowl_the_poll_no_longer_knows(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The name must not depend on the bowl still being in the last poll.
+
+    `device_info` returns early when the bowl has gone, and that early
+    return is on the same fallback path: it must not be the one place that
+    hands Home Assistant a nameless device and gets the account title back.
+    """
+    entity = await _entity(hass)
+    gone = AlwaysFullEntity(entity.coordinator, "ffeeddccbbaa", DESCRIPTION)
+
+    name = gone.device_info["name"]
+    assert name
+    for part in ACCOUNT_PARTS:
+        assert part not in name.lower(), name
 
 
 async def test_available_tracks_update_success_and_membership(
@@ -204,3 +301,34 @@ async def test_write_still_goes_through_when_the_group_is_complete(
     await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
 
     assert [method for method, _payload in mock_api.writes] == ["set_flush_config"]
+
+
+async def test_no_entity_id_carries_the_account_address(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Not one entity id this integration creates may carry the account.
+
+    The registry-level companion to the unique-id and device-identifier
+    guard in `test_switch.py`, and it covers the thing that one could not:
+    an entity id is derived from the DEVICE NAME, so a `DeviceInfo` that
+    omits its name publishes the config entry title -- which is the
+    address -- into every per-bowl entity id, slugified past any search
+    for an `@`.
+
+    Run across every platform, with the vendor's `deviceName` removed:
+    that is the state the fault needs, and it is the state no committed
+    fixture bowl is in.
+    """
+    mock_api.device_rows_override = _unnamed_rows()
+
+    entry = await setup_platforms(hass, list(PLATFORMS))
+    registered = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+    # Asserted to exist, so this cannot pass by finding nothing.
+    assert len(registered) > len(NOTIFY_SWITCHES)
+
+    local_part, _, domain = ACCOUNT_EMAIL.partition("@")
+    for entity in registered:
+        for part in ("@", ACCOUNT_EMAIL, local_part, domain, domain.replace(".", "_")):
+            assert part not in entity.entity_id, entity.entity_id

@@ -503,6 +503,14 @@ async def setup_platforms(
 ) -> MockConfigEntry:
     """Load a config entry with ONLY `platforms` forwarded."""
     entry_kwargs.setdefault("unique_id", ENTRY_UNIQUE_ID)
+    # Titled the way the config flow titles it -- `async_create_entry(title=email)`.
+    # `MockConfigEntry` otherwise defaults to "Mock Title", which is a
+    # harmless-looking difference that hid a real leak: Home Assistant falls
+    # back to the ENTRY TITLE for any device whose `DeviceInfo` omits a name,
+    # so with the vendor's `deviceName` missing every per-bowl entity id was
+    # built from the account's address on a real install while the suite,
+    # titled "Mock Title", saw nothing wrong.
+    entry_kwargs.setdefault("title", ENTRY_UNIQUE_ID)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, **entry_kwargs)
     entry.add_to_hass(hass)
     with patch("custom_components.alwaysfull.PLATFORMS", platforms):
