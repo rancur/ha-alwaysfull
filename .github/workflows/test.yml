@@ -1,0 +1,74 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # One place to change it. See the `python-version` matrix below for why
+  # there is currently only one value to change.
+  DEFAULT_PYTHON: "3.14"
+
+jobs:
+  lint:
+    name: Ruff and mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+
+      # The rule set is pinned explicitly in pyproject.toml. `ruff check .`
+      # therefore means the same thing here as it does locally, which is the
+      # entire reason it is pinned.
+      - name: ruff
+        run: ruff check .
+
+      # `ruff format --check` is deliberately NOT run. This repository is
+      # hand-formatted at 120 columns and ruff's formatter would rewrite 31
+      # of its 42 files; adopting it is a decision to make on purpose, in
+      # its own commit, not something to discover as a red CI job.
+      - name: mypy
+        run: mypy
+
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14 ONLY, and the brief for this task asked for 3.13 as well.
+        # It cannot be done: homeassistant 2026.9.2 declares
+        # `Requires-Python: >=3.14.2` and
+        # pytest-homeassistant-custom-component 0.13.365 declares
+        # `>=3.14`, so a 3.13 job does not fail a test -- it fails `pip
+        # install` before a test is collected, which is a red job that
+        # tells nobody anything.
+        #
+        # This is a matrix rather than a bare value so the day 3.15 is
+        # supported it is one line, and so the shape of the question stays
+        # visible.
+        python-version: ["3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+
+      - name: pytest
+        # `--snapshot-warn-unused` is NOT passed. An unused snapshot means
+        # an entity stopped being produced, which is exactly the kind of
+        # silent regression the 140 snapshots exist to catch, so it stays
+        # an error.
+        run: pytest -q --cov=custom_components.alwaysfull --cov-report=term-missing

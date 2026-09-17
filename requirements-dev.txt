@@ -1,6 +1,14 @@
 # Verified working set on Python 3.14.4 against Home Assistant 2026.9.x
 homeassistant==2026.9.2
-pytest==8.4.2                              # pytest 9 breaks pytest-homeassistant-custom-component
+# pytest 9, NOT 8. This file pinned pytest==8.4.2 with the note "pytest 9
+# breaks pytest-homeassistant-custom-component". Whatever was true when that
+# was written is not true of 0.13.365, which declares `pytest==9.0.3` as a
+# HARD requirement -- so the two pins together made this file impossible to
+# install: `pip install -r requirements-dev.txt` failed with
+# ResolutionImpossible, and every CI job starting from a clean environment
+# would have died before collecting a test. Measured on 3.14.4 in a fresh
+# venv: 349 passed, 140 snapshots, under 9.0.3.
+pytest==9.0.3
 pytest-homeassistant-custom-component==0.13.365
 pytest-asyncio==1.4.0
 syrupy==6.0.0

@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Problem with the bowl itself, or with the vendor's app
+    url: https://alwaysfull.com/pages/contact
+    about: >
+      This is an unofficial integration and cannot fix hardware, firmware
+      or the vendor's servers. If the bowl misbehaves in the Always Full
+      app too, the vendor is who can help.
+  - name: Question about Home Assistant automations
+    url: https://community.home-assistant.io/
+    about: >
+      The Home Assistant community forum is a better place for "how do I
+      automate this" than an issue tracker.

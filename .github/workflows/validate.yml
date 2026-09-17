@@ -1,0 +1,69 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly. hassfest and the HACS checks are moving targets -- both track
+    # Home Assistant releases -- so a repository that passed on the day it
+    # was pushed can be failing a month later with nothing changed here.
+    # Finding that out on a schedule beats finding it out from a user.
+    - cron: "0 5 * * 1"
+
+permissions: {}
+
+jobs:
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # `brands` is ignored, and this is the only check that is.
+          #
+          # It verifies that the domain has assets in home-assistant/brands.
+          # That repository stopped accepting new custom components in Home
+          # Assistant 2026.3, so there is no PR that would make this check
+          # pass -- it is not a gap that can be closed by doing the work.
+          # The icon it would have wanted ships in the repository instead,
+          # at custom_components/alwaysfull/brand/icon.png.
+          #
+          # Nothing else is ignored on purpose. `topics`, `description` and
+          # `issues` are settings on the GitHub repository rather than
+          # things in this tree, and they are one click each; suppressing
+          # them would hide work that can actually be done.
+          ignore: brands
+
+  no-pii:
+    name: No personal data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # NOT the default. `actions/checkout` defaults to `fetch-depth: 1`,
+          # and under that default the history half of this check would walk
+          # exactly one commit, find nothing, and report a green that means
+          # nothing -- which is the failure mode the check exists to catch,
+          # reintroduced by a CI default.
+          #
+          # The script refuses to run against a shallow clone rather than
+          # trusting this line to stay correct.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Scan the tree, the full history and every commit message
+        # No dependencies: the script is standard library only, so this
+        # needs no install step and cannot break when a pin moves.
+        run: python scripts/check_no_pii.py

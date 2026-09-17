@@ -1,0 +1,116 @@
+name: Bug report
+description: Something in the integration does not work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The two things that resolve an issue
+        fastest are the **diagnostics download** and the **debug log** —
+        both are asked for below, and both are safe to post.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can it be reproduced?
+      placeholder: |
+        1. Set the daily minimum to ...
+        2. Wait for the next poll
+        3. The number snaps back to ...
+    validations:
+      required: true
+
+  - type: input
+    id: ha-version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.9.2"
+    validations:
+      required: true
+
+  - type: input
+    id: integration-version
+    attributes:
+      label: Always Full integration version
+      description: HACS shows this on the integration's page.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: water-source
+    attributes:
+      label: What is the bowl connected to?
+      description: |
+        The `sensor.<your bowl>_water_source` entity says, if you are not
+        sure. It changes which entities mean anything — the filter
+        entities only apply to a wall unit.
+      options:
+        - Wall unit (plumbed)
+        - Bottle pump
+        - Nothing / standalone bowl
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics download
+      description: |
+        **Settings → Devices & Services → Always Full → ⋮ → Download
+        diagnostics**, then drag the file into this box.
+
+        **It is safe to post.** The download is redacted before it is
+        written: your email address, password, session token, account id
+        and every bowl's device id are replaced with `**REDACTED**`, and
+        so is the text of each alert — the vendor writes your bowl's MAC
+        address into that message. Each bowl appears as a label like
+        `bowl-1a2b3c4d`, which is derived from its id and tells a reader
+        nothing about your hardware.
+
+        Nothing else in this repository can produce a file with your
+        credentials in it. If you find something that does, that is itself
+        the bug and it will be treated as urgent.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug log
+      description: |
+        Add this to `configuration.yaml`, restart, reproduce the problem,
+        then paste the `custom_components.alwaysfull` lines.
+
+        ```yaml
+        logger:
+          default: warning
+          logs:
+            custom_components.alwaysfull: debug
+        ```
+
+        The integration never logs your password, session token or request
+        signature. It does log device ids, so skim it before pasting if
+        that matters to you.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: The bowl works in the vendor's own app right now.
+          required: true
+        - label: >
+            I have searched existing issues, including closed ones, and the
+            README's Known limitations section.
+          required: true

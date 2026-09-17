@@ -1,0 +1,30 @@
+name: Feature request
+description: Something the bowl can do that this integration does not expose.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: this integration talks to the
+        vendor's cloud API and nothing else. The bowl has **no local
+        control path at all** — a full TCP scan of all 65,535 ports found
+        zero open ports. If the vendor's app cannot do it, this cannot
+        either.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to be able to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: vendor-app
+    attributes:
+      label: Can the vendor's app do it today?
+      description: >
+        If yes, say where in the app it lives — that is usually enough to
+        find the endpoint behind it. If no, say so; it may still be worth
+        looking for, but the odds are much longer.
+    validations:
+      required: true
