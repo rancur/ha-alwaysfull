@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from datetime import timedelta
 
 import aiohttp
 import pytest
@@ -12,7 +13,10 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.alwaysfull.const import (
     DOMAIN,
@@ -437,6 +441,37 @@ async def test_a_later_poll_overrides_a_written_value_the_vendor_did_not_apply(
     await coordinator.async_refresh()
 
     assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 60
+
+
+async def test_a_write_does_not_postpone_the_poll_that_confirms_it(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """Publishing a written value must not push the next poll out.
+
+    The scheduled poll is the ONLY thing that can catch a write the vendor
+    accepted and then ignored, so anything that delays it weakens the one
+    guarantee the optimistic update depends on.
+    `async_set_updated_data` would: it re-arms the timer to now plus the
+    interval, so a user adjusting settings faster than the interval pushes
+    the check ahead of themselves indefinitely and it never runs at all.
+
+    Fifty seconds into a sixty-second interval, so the two behaviours
+    disagree: the poll is due in ten seconds, and a re-armed timer would
+    not fire for sixty.
+    """
+    coordinator = await _setup(hass)
+    freezer.tick(timedelta(seconds=50))
+
+    written = dataclasses.replace(coordinator.data[DEVICE_ID].config)
+    written.flush_interval_minutes = 30
+    await coordinator.async_refresh_after_write(DEVICE_ID, written)
+    before = mock_api.device_list_calls
+
+    freezer.tick(timedelta(seconds=11))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert mock_api.device_list_calls == before + 1
 
 
 async def test_a_write_with_no_known_config_requests_a_full_poll(

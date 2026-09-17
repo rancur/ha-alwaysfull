@@ -408,7 +408,22 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         """
         if config is not None and self.data and device_id in self.data:
             self.data[device_id].config = dataclasses.replace(config)
-            self.async_set_updated_data(self.data)
+            # `async_update_listeners`, NOT `async_set_updated_data`, and
+            # the difference is the whole confirmation story above.
+            # `async_set_updated_data` re-arms the poll timer to
+            # now + interval, so a user adjusting settings faster than the
+            # interval would push the poll that CHECKS those settings out
+            # ahead of themselves indefinitely, and the one thing that can
+            # catch a write the vendor accepted but ignored would never
+            # run. It also forces `last_update_success` true, which a
+            # successful write is not evidence of -- the poll is a
+            # different request, and a bowl whose polls are failing must
+            # not be made to look healthy by someone flipping a switch.
+            #
+            # `self.data` is already correct: the config above was mutated
+            # in place on the object listeners are holding. All that is
+            # left is to tell them to re-read it.
+            self.async_update_listeners()
             return
 
         await self.async_request_refresh()
