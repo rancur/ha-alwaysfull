@@ -1,0 +1,157 @@
+# serializer version: 1
+# name: test_all_event_entities[event.second_bowl_alert-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <EventEntityCapabilityAttribute.EVENT_TYPES: 'event_types'>: list([
+        'tilted',
+        'daily_maximum',
+        'fill_failed',
+        'not_attached',
+        'high_water_level',
+        'replace_wall_filter',
+        'replace_bowl_filter',
+        'daily_decreased',
+        'operation_confirmation',
+        'hardware_fault',
+        'unknown',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'event',
+    'entity_category': None,
+    'entity_id': 'event.second_bowl_alert',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Alert',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Alert',
+    'platform': 'alwaysfull',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'alert',
+    'unique_id': '001122334455_alert',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_event_entities[event.second_bowl_alert-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EventEntityStateAttribute.EVENT_TYPE: 'event_type'>: None,
+      <EventEntityCapabilityAttribute.EVENT_TYPES: 'event_types'>: list([
+        'tilted',
+        'daily_maximum',
+        'fill_failed',
+        'not_attached',
+        'high_water_level',
+        'replace_wall_filter',
+        'replace_bowl_filter',
+        'daily_decreased',
+        'operation_confirmation',
+        'hardware_fault',
+        'unknown',
+      ]),
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Second Bowl Alert',
+    }),
+    'context': <ANY>,
+    'entity_id': 'event.second_bowl_alert',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_all_event_entities[event.test_bowl_alert-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <EventEntityCapabilityAttribute.EVENT_TYPES: 'event_types'>: list([
+        'tilted',
+        'daily_maximum',
+        'fill_failed',
+        'not_attached',
+        'high_water_level',
+        'replace_wall_filter',
+        'replace_bowl_filter',
+        'daily_decreased',
+        'operation_confirmation',
+        'hardware_fault',
+        'unknown',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'event',
+    'entity_category': None,
+    'entity_id': 'event.test_bowl_alert',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Alert',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Alert',
+    'platform': 'alwaysfull',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'alert',
+    'unique_id': 'aabbccddeeff_alert',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_event_entities[event.test_bowl_alert-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EventEntityStateAttribute.EVENT_TYPE: 'event_type'>: None,
+      <EventEntityCapabilityAttribute.EVENT_TYPES: 'event_types'>: list([
+        'tilted',
+        'daily_maximum',
+        'fill_failed',
+        'not_attached',
+        'high_water_level',
+        'replace_wall_filter',
+        'replace_bowl_filter',
+        'daily_decreased',
+        'operation_confirmation',
+        'hardware_fault',
+        'unknown',
+      ]),
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Test Bowl Alert',
+    }),
+    'context': <ANY>,
+    'entity_id': 'event.test_bowl_alert',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---

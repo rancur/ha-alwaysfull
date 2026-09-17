@@ -30,8 +30,15 @@ from homeassistant.components.sensor.const import (
 )
 from homeassistant.const import EntityCategory, UnitOfVolume
 
-from custom_components.alwaysfull import binary_sensor, sensor
+from custom_components.alwaysfull import binary_sensor, event, sensor
 from custom_components.alwaysfull.binary_sensor import BINARY_SENSORS
+from custom_components.alwaysfull.const import (
+    ALERT_OPTIONS,
+    ALERT_TYPE_OPTIONS,
+    ALERT_TYPES,
+    UNKNOWN,
+)
+from custom_components.alwaysfull.event import ALERT_EVENTS
 from custom_components.alwaysfull.sensor import (
     SENSORS,
     AlwaysFullSensorEntityDescription,
@@ -45,6 +52,14 @@ STRINGS = Path(__file__).parents[1] / "custom_components/alwaysfull/strings.json
 # `units` 1 = millilitres, 2 = fluid ounces. Both bowls a user can own.
 UNITS_VALUES = (1, 2)
 
+# Every description table this module validates, keyed by the platform its
+# translations live under.
+PLATFORM_TABLES = {
+    "sensor": SENSORS,
+    "binary_sensor": BINARY_SENSORS,
+    "event": ALERT_EVENTS,
+}
+
 # What each sensor is meant to be categorised as, stated here so the choice
 # survives a snapshot regeneration. `last_alert` is deliberately NOT
 # diagnostic: Home Assistant collapses diagnostic entities by default, and
@@ -57,6 +72,9 @@ EXPECTED_CATEGORIES = {
     "water_source": EntityCategory.DIAGNOSTIC,
     "firmware": EntityCategory.DIAGNOSTIC,
 }
+# The alert event is the paid-subscription feature this integration gives
+# away; burying it under the diagnostics fold would defeat the point.
+EXPECTED_EVENT_CATEGORIES = {"alert": None}
 EXPECTED_BINARY_CATEGORIES = {
     "online": EntityCategory.DIAGNOSTIC,
     "system_problem": None,
@@ -187,21 +205,25 @@ def test_keys_and_translation_keys_are_unique() -> None:
         assert all(translation_keys)
 
 
-@pytest.mark.parametrize("platform", ["sensor", "binary_sensor"])
+@pytest.mark.parametrize("platform", list(PLATFORM_TABLES))
 def test_every_entity_has_english_text(platform: str) -> None:
-    """Both translation files must carry a name for every entity.
+    """Every translation file must carry a name for every entity.
 
     `strings.json` is not read at runtime for a custom integration, so
     `translations/en.json` is what users actually see -- and a missing name
     does not raise, it silently changes the entity id. The two files are
     also asserted identical, since only one of them is ever exercised.
+
+    An event entity keeps its per-value labels one level deeper than an
+    enum sensor does (under `state_attributes.event_type.state`), which is
+    the sort of detail that silently ships as raw `hardware_fault` in the
+    UI if nobody checks it.
     """
     translations = json.loads(TRANSLATIONS.read_text())
     assert translations == json.loads(STRINGS.read_text())
 
-    table = SENSORS if platform == "sensor" else BINARY_SENSORS
     section = translations["entity"][platform]
-    for description in table:
+    for description in PLATFORM_TABLES[platform]:
         text = section.get(description.translation_key)
         assert text is not None, f"{description.translation_key}: no English text"
         assert text.get("name"), f"{description.translation_key}: no name"
@@ -213,8 +235,18 @@ def test_every_entity_has_english_text(platform: str) -> None:
                 "declared options disagree"
             )
 
+        event_types = getattr(description, "event_types", None)
+        if event_types:
+            labelled = text.get("state_attributes", {}).get("event_type", {}).get("state", {})
+            assert set(labelled) == set(event_types), (
+                f"{description.translation_key}: the translated event types and "
+                "the declared ones disagree"
+            )
 
-@pytest.mark.parametrize("module", [sensor, binary_sensor], ids=lambda m: m.__name__.split(".")[-1])
+
+@pytest.mark.parametrize(
+    "module", [sensor, binary_sensor, event], ids=lambda m: m.__name__.split(".")[-1]
+)
 def test_read_platforms_declare_parallel_updates(module: Any) -> None:
     """Both read platforms state `PARALLEL_UPDATES = 0` explicitly.
 
@@ -235,10 +267,31 @@ def test_entity_categories_and_default_enablement() -> None:
     """
     assert {d.key: d.entity_category for d in SENSORS} == EXPECTED_CATEGORIES
     assert {d.key: d.entity_category for d in BINARY_SENSORS} == EXPECTED_BINARY_CATEGORIES
+    assert {d.key: d.entity_category for d in ALERT_EVENTS} == EXPECTED_EVENT_CATEGORIES
 
     disabled = {
         description.key
-        for description in (*SENSORS, *BINARY_SENSORS)
+        for description in (*SENSORS, *BINARY_SENSORS, *ALERT_EVENTS)
         if not description.entity_registry_enabled_default
     }
     assert disabled == EXPECTED_DISABLED_BY_DEFAULT
+
+
+def test_the_alert_mapping_is_the_only_one() -> None:
+    """One vendor->option mapping, reported identically by both platforms.
+
+    `last_alert` publishes it as enum `options` and the alert event as
+    `event_types`. Someone writing an automation against one and then the
+    other must not have to learn two spellings, and an alert added to
+    `ALERT_TYPES` without a mapping would silently report `unknown` for
+    ever -- which looks exactly like a vendor type nobody has seen yet
+    rather than like the bug it is.
+    """
+    assert set(ALERT_TYPE_OPTIONS) == set(ALERT_TYPES)
+    assert "unknown" not in ALERT_TYPE_OPTIONS.values()
+    assert list(ALERT_TYPE_OPTIONS.values()) == ALERT_OPTIONS[:-1]
+    assert ALERT_OPTIONS[-1] == UNKNOWN
+
+    last_alert = next(d for d in SENSORS if d.key == "last_alert")
+    alert_event = next(d for d in ALERT_EVENTS if d.key == "alert")
+    assert list(last_alert.options) == list(alert_event.event_types) == ALERT_OPTIONS

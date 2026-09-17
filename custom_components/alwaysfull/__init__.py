@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from .coordinator import AlwaysFullConfigEntry
 
 # Read platforms. The write platforms are added by a later task.
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AlwaysFullConfigEntry) -> bool:

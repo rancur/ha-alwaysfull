@@ -72,6 +72,40 @@
         "name": "Water source detached"
       }
     },
+    "event": {
+      "alert": {
+        "name": "Alert",
+        "state_attributes": {
+          "created": {
+            "name": "Raised at"
+          },
+          "event_type": {
+            "state": {
+              "daily_decreased": "Drank less than usual",
+              "daily_maximum": "Daily maximum reached",
+              "fill_failed": "Fill failed",
+              "hardware_fault": "Hardware fault",
+              "high_water_level": "High water level",
+              "not_attached": "Water source not attached",
+              "operation_confirmation": "Operation confirmed",
+              "replace_bowl_filter": "Replace bowl filter",
+              "replace_wall_filter": "Replace wall filter",
+              "tilted": "Tilted",
+              "unknown": "Unknown"
+            }
+          },
+          "id": {
+            "name": "Alert ID"
+          },
+          "message": {
+            "name": "Message"
+          },
+          "raw_type": {
+            "name": "Vendor alert type"
+          }
+        }
+      }
+    },
     "sensor": {
       "filter_life": {
         "name": "Filter life"
