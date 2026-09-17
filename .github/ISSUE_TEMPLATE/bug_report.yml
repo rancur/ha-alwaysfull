@@ -42,7 +42,7 @@ body:
     attributes:
       label: Always Full integration version
       description: HACS shows this on the integration's page.
-      placeholder: "0.3.0"
+      placeholder: "0.3.1"
     validations:
       required: true
 
