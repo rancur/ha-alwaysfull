@@ -51,6 +51,15 @@ def _truncate_offset_to_hours(offset: timedelta) -> int:
     return int(offset.total_seconds() / 3600)
 
 
+def _hash_password(password: str) -> str:
+    """Return the vendor's client-side password hash: md5(md5(plaintext)).
+
+    The plaintext password is never sent over the wire, and never logged.
+    """
+    once = hashlib.md5(password.encode()).hexdigest()
+    return hashlib.md5(once.encode()).hexdigest()
+
+
 def _local_time_zone_offset_hours() -> int:
     """Return the OS's local UTC offset in whole hours, as a last-resort fallback.
 
@@ -187,3 +196,137 @@ class AlwaysFullClient:
             raise AlwaysFullAuthError(payload.get("msg") or "Token expired")
 
         raise AlwaysFullError(payload.get("msg") or f"Unexpected response code {code}")
+
+    # -- Endpoint methods ---------------------------------------------------
+    #
+    # These are thin wrappers over request(): no signing/envelope logic lives
+    # here, only the path, the HTTP method and the vendor's own (non-uniform)
+    # parameter names. See the design doc's "Traps the implementation must
+    # honour" section for the full rationale behind each one.
+
+    async def login(self, email: str, password: str) -> Any:
+        """Log in, store the returned token on this client, and return it.
+
+        The vendor hashes the password client-side as md5(md5(plaintext))
+        before it ever goes over the wire; the plaintext itself is not sent.
+        """
+        token = await self.request(
+            "POST",
+            "/app/user/login",
+            {"account": email, "password": _hash_password(password)},
+        )
+        self.token = token
+        return token
+
+    async def device_list(self) -> Any:
+        """List every bowl on the account.
+
+        Returns the vendor's pagination envelope unchanged --
+        ``{pageNum, pageSize, totalPage, totalSize, hasNext, data: [...]}``.
+        Each row carries the full device state (list and detail rows share
+        the same shape), so one call covers every bowl on the account.
+        """
+        return await self.request("GET", "/app/device/list", {"pageNum": 1, "pageSize": 50})
+
+    async def device_config(self, device_id: str) -> Any:
+        """Return the raw device config object for ``device_id``."""
+        return await self.request("GET", "/app/device/config", {"deviceId": device_id})
+
+    async def drinking_log(self, device_id: str, units: int, start: str, end: str) -> Any:
+        """Return the drinking log for ``device_id`` between ``start`` and ``end``.
+
+        ``start``/``end`` are local dates as ``YYYY-MM-DD``; they are widened
+        to a full local start-of-day/end-of-day timestamp with no timezone
+        suffix, matching what the vendor app sends.
+
+        Unlike every other list-shaped endpoint here, this one is **not**
+        paginated: the vendor returns a bare array of
+        ``{drinkingDate, totalCapacity}`` rows, not a pagination envelope.
+        That asymmetry is real (confirmed against the live API) and is
+        passed straight through rather than normalised into a fake envelope.
+        """
+        params = {
+            "deviceId": device_id,
+            "units": units,
+            "startTime": f"{start} 00:00:00",
+            "endTime": f"{end} 23:59:59",
+        }
+        return await self.request("GET", "/app/drinking/log", params)
+
+    async def notify_config(self) -> Any:
+        """Return the account-level notification config (no device id)."""
+        return await self.request("GET", "/app/notify/getConfig")
+
+    async def save_notify_config(self, config: dict[str, Any]) -> Any:
+        """Save the notification config.
+
+        ``saveConfig`` is a whole-object read-modify-write. The live payload
+        carries both ``notifyItems`` and ``notifyList`` -- identical arrays
+        in the live capture -- and it is not known which one the server
+        actually reads back on save. This round-trips the entire object the
+        caller hands in (typically the dict from ``notify_config()`` with
+        one field toggled) rather than reconstructing a payload from a
+        subset of fields, so whichever array the server reads stays
+        consistent with the other.
+        """
+        return await self.request("POST", "/app/notify/saveConfig", config)
+
+    async def notify_log(self, device_id: str, page_size: int = 20) -> Any:
+        """Return page 1 of the notification log for ``device_id``."""
+        params = {"deviceId": device_id, "pageNum": 1, "pageSize": page_size}
+        return await self.request("GET", "/app/notify/getNotifyLog", params)
+
+    # -- Writers ---------------------------------------------------------
+    #
+    # `device_id` is always the value identifying the bowl; each method maps
+    # it onto the wire key the vendor actually expects for that endpoint
+    # (`devNo` for most writers, `deviceId` for setUnits). `**fields` are
+    # sent verbatim under whatever wire names the caller supplies -- unit
+    # conversion (minutes<->seconds, days<->seconds, capacity<->filterCapacity,
+    # the deviceType 9"/7" inversion, etc.) is the caller's job, not this
+    # layer's.
+
+    async def set_flush_config(self, device_id: str, **fields: Any) -> Any:
+        """Set flush config (``cleanCycle`` seconds, ``cleanTime``, ...)."""
+        return await self.request("POST", "/app/device/flushConfig", {"devNo": device_id, **fields})
+
+    async def set_sleep_config(self, device_id: str, **fields: Any) -> Any:
+        """Set sleep config (``sleepStart``/``sleepEnd`` minutes since midnight, ...)."""
+        return await self.request("POST", "/app/device/sleepConfig", {"devNo": device_id, **fields})
+
+    async def set_filter_config(self, device_id: str, **fields: Any) -> Any:
+        """Set filter config.
+
+        Filter capacity is READ back as ``capacity`` but must be WRITTEN as
+        ``filterCapacity`` -- pass it under that name in ``fields``.
+        """
+        return await self.request("POST", "/app/device/filterConfig", {"devNo": device_id, **fields})
+
+    async def set_maintenance_config(self, device_id: str, **fields: Any) -> Any:
+        """Set maintenance config (``deviceCanUseTime`` seconds, ...)."""
+        return await self.request("POST", "/app/device/maintenanceConfig", {"devNo": device_id, **fields})
+
+    async def set_water_config(self, device_id: str, **fields: Any) -> Any:
+        """Set water config.
+
+        Must include ``units`` echoed from ``device_config``/``device_list``
+        or the server misreads the daily min/max thresholds -- the caller's
+        responsibility, not this method's.
+        """
+        return await self.request("POST", "/app/device/waterConfig", {"devNo": device_id, **fields})
+
+    async def set_log_config(self, device_id: str, **fields: Any) -> Any:
+        """Set drinking-log recording config (``logState``, ...)."""
+        return await self.request("POST", "/app/device/logConfig", {"devNo": device_id, **fields})
+
+    async def set_units(self, device_id: str, units: int) -> Any:
+        """Set display units. Uses ``deviceId``, NOT ``devNo``."""
+        return await self.request("POST", "/app/device/setUnits", {"deviceId": device_id, "units": units})
+
+    async def set_device_type(self, device_id: str, device_type: int) -> Any:
+        """Set bowl size. NOTE the vendor's enum is inverted: 0 = 9", 1 = 7"."""
+        return await self.request("POST", "/app/device/setType", {"devNo": device_id, "deviceType": device_type})
+
+    async def reset_filter(self, device_id: str) -> Any:
+        """Reset filter life."""
+        return await self.request("POST", "/app/device/reset/filter", {"devNo": device_id})
