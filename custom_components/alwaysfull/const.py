@@ -55,6 +55,30 @@ CREDENTIAL_REJECTION_CODES = frozenset(
     {CODE_CREDENTIALS_REJECTED, CODE_CREDENTIALS_REJECTED_ALT}
 )
 
+# The vendor's RATE LIMIT, and the only one it has: every rate limit
+# observed against the live service arrived as this envelope code under
+# HTTP 200, never as HTTP 429. VERIFIED -- eight logins in a few seconds
+# answered `603 "Too many requests, please try again later."`
+#
+# It was previously documented and handled as a generic "system error",
+# which is why `AlwaysFullRateLimitError` had never once fired against the
+# real service and every rate limit surfaced to users as an unexpected
+# failure.
+#
+# CAVEAT, and it cannot be resolved from here: `603` is ALSO returned by
+# `/app/ota/check` and by `/app/pay/get/product` on an account with no
+# subscription, neither of which is plausibly a rate limit. So the vendor
+# has either overloaded one code or genuinely means "temporarily
+# unavailable" by it. We cannot distinguish the readings, and we do not
+# try: "back off and retry later" is the correct response to all of them,
+# and it is the only reading that cannot trap a user in a reauth loop.
+CODE_RATE_LIMITED = "603"
+
+# The one endpoint that authenticates with the stored email/password pair
+# rather than with a token. Which endpoint answered a credential-rejection
+# code decides what that code MEANS -- see `api.AlwaysFullClient._handle_response`.
+LOGIN_PATH = "/app/user/login"
+
 ALERT_TYPES = [
     "Tilted",
     "Daily_Maximum",

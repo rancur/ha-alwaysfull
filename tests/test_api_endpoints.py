@@ -37,6 +37,7 @@ from custom_components.alwaysfull.exceptions import (
     AlwaysFullAuthError,
     AlwaysFullCredentialsError,
     AlwaysFullError,
+    AlwaysFullRateLimitError,
 )
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
@@ -77,8 +78,10 @@ class _FakeSession:
         return _FakeResponse(self._status, self._payload)
 
 
-def _client(payload: dict[str, Any] | None = None, *, token: str = "tok") -> tuple[AlwaysFullClient, _FakeSession]:
-    session = _FakeSession(payload)
+def _client(
+    payload: dict[str, Any] | None = None, *, token: str = "tok", status: int = 200
+) -> tuple[AlwaysFullClient, _FakeSession]:
+    session = _FakeSession(payload, status)
     client = AlwaysFullClient(session, token=token, tz_offset_hours=0)
     return client, session
 
@@ -168,6 +171,60 @@ async def test_unclassified_code_is_a_plain_error_and_nothing_more():
     with pytest.raises(AlwaysFullError) as err:
         await client.device_list()
     assert type(err.value) is AlwaysFullError
+
+
+# --- rate limiting -------------------------------------------------------
+#
+# The vendor signals a rate limit in the ENVELOPE CODE, not with HTTP 429.
+# VERIFIED: eight logins in a few seconds answer
+# `603 "Too many requests, please try again later."` with HTTP 200.
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_login_is_a_rate_limit_not_a_generic_error():
+    """603 from the login endpoint is the vendor asking us to slow down.
+
+    Asserted as an EXACT type. `AlwaysFullRateLimitError` is an
+    `AlwaysFullError`, so `pytest.raises(AlwaysFullError)` would pass for
+    the generic-error branch that shipped this bug -- which is precisely
+    how every rate limit reached users as "unexpected error".
+    """
+    client, _ = _client(
+        {"code": "603", "msg": "Too many requests, please try again later.", "data": None},
+        token="",
+    )
+    with pytest.raises(AlwaysFullError) as err:
+        await client.login("user@example.com", "pw")
+    assert type(err.value) is AlwaysFullRateLimitError
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_read_is_a_rate_limit_and_never_an_auth_error():
+    """603 on a token-bearing endpoint must not look like an auth problem.
+
+    A rate limit mapped anywhere into the auth family pushes the user into
+    a reauth flow that succeeds and changes nothing, and the next poll is
+    rate-limited again: a loop they cannot escape.
+    """
+    client, _ = _client(
+        {"code": "603", "msg": "Too many requests, please try again later.", "data": None}
+    )
+    with pytest.raises(AlwaysFullRateLimitError) as err:
+        await client.device_list()
+    assert not isinstance(err.value, AlwaysFullAuthError)
+
+
+@pytest.mark.asyncio
+async def test_http_429_is_still_a_rate_limit():
+    """The transport-level mapping stays, even though this vendor never uses it.
+
+    It has never fired against the live service -- every observed rate
+    limit arrived as envelope code 603 with HTTP 200 -- but it costs
+    nothing and another deployment of the same app may answer this way.
+    """
+    client, _ = _client({"code": "200", "msg": "ok", "data": {}}, status=429)
+    with pytest.raises(AlwaysFullRateLimitError):
+        await client.device_list()
 
 
 # --- device_list ---------------------------------------------------------

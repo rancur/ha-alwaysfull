@@ -154,7 +154,7 @@ Every response is `{"code": ..., "msg": ..., "data": ...}`. `code` is a
 | `651` | Token expired / rejected. Routine — see §1.5. | VERIFIED |
 | `652` | Credentials rejected (`"Invalid email address or password."`) | VERIFIED |
 | `602` | Also a credential rejection, from the same login endpoint | VERIFIED (observed once, not reproducible on demand) |
-| `603` | System error. `/app/ota/check` answers this consistently. | VERIFIED |
+| `603` | **Rate limited.** `"Too many requests, please try again later."` | VERIFIED |
 
 **`652` does not distinguish a wrong password from an account that does not
 exist.** VERIFIED: a real account with a deliberately wrong password and an
@@ -165,10 +165,38 @@ message. No client can tell those two cases apart, and none should try.
 authenticate; treating it as anything else strands the user on "unexpected
 error" instead of "check your password".
 
-HTTP `429` has been seen from the front door and arrives without a JSON
-envelope. Handle it at the transport layer, and **never** convert it into an
-authentication failure: the credentials are fine, so pushing the user into a
-re-authentication flow puts them in a loop they cannot escape.
+### 1.4 `603` IS THE RATE LIMIT, and it is the only one
+
+**VERIFIED, and it is easy to get wrong because the signal is in the wrong
+place.** The vendor rate-limits in the **envelope code**, under HTTP **200** —
+not with HTTP `429`. Eight logins in the space of a few seconds answered:
+
+```json
+{"code": "603", "msg": "Too many requests, please try again later.", "data": null}
+```
+
+That is the measured trigger, not a documented one: roughly **eight logins in a
+few seconds** is enough. Where the threshold actually sits, and whether reads
+are counted on the same budget as logins, is unknown. Treat the number as
+"a handful of logins in quick succession is too many".
+
+`603` was previously recorded here as a generic *system error*, which is why
+`/app/ota/check` is listed in §3.7 as answering it "consistently". Be careful
+with that reading: `603` has **also** been observed from `/app/ota/check` and
+from `/app/pay/get/product` on an account with **no subscription**, neither of
+which is plausibly a rate limit. So either the vendor overloads one code, or
+`603` means something broader like "temporarily unavailable". **The two
+readings are not distinguishable from the client**, and they do not need to be:
+back off and retry later is the correct response to both.
+
+What must never happen is mapping `603` into the authentication family. The
+credentials are fine, so a reauthentication prompt succeeds, the next request
+is rate-limited again, and the user is trapped in a loop they cannot escape.
+
+HTTP `429` has also been seen from the front door and arrives without a JSON
+envelope. Handle it at the transport layer too — it costs nothing and another
+deployment may answer that way — but do not expect it: every rate limit
+observed from *this* service arrived as `603`.
 
 ### 1.5 THE VENDOR IS SINGLE-SESSION
 
@@ -518,7 +546,7 @@ about this endpoint.
 | --- | --- | --- |
 | `GET /app/device/ipconfig` | `{"ip": ..., "port": "9557"}` — where the bowl dials out to. See §8. | VERIFIED |
 | `GET /app/pet/list` | Pet names. See the privacy section. | VERIFIED |
-| `GET /app/ota/check` | Answers `603 system error` on the live server. No OTA path is usable. | VERIFIED |
+| `GET /app/ota/check` | Answers `603` on the live server (see §1.4 — that is the rate-limit code, and this endpoint answers it consistently even when nothing has been rate-limited). No OTA path is usable. | VERIFIED |
 
 ---
 
@@ -823,8 +851,11 @@ Stated so nobody mistakes silence for absence of doubt:
 - The exact drinking-log range threshold at which the response becomes empty.
 - What `602` means, beyond "not authenticated".
 - The binary protocol on port 9557, in its entirety.
-- Whether the server enforces any rate limit below the HTTP `429` seen at the
-  front door, and at what rate.
+- Where the `603` rate limit's threshold actually sits, and whether reads count
+  against the same budget as logins. Eight logins in a few seconds is enough to
+  trip it; nothing narrower has been measured.
+- Whether `603` is one overloaded code or a broader "temporarily unavailable"
+  — `/app/ota/check` and `/app/pay/get/product` (no subscription) both answer it.
 
 ---
 
@@ -845,3 +876,6 @@ credentials. It has no published limits and no way to ask for more.
   (§3.4): it costs a request and returns stale data.
 - Do not retry `651` in a loop. §1.5 explains what that does to the user's phone
   app, and to you.
+- Bound how often you re-login, not just how often you retry one operation. Two
+  clients on one account evict each other (§1.5), and "re-login on every
+  failure" turns that into a login storm — which is exactly what trips `603`.

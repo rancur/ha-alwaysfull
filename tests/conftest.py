@@ -22,7 +22,7 @@ import json
 from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import patch
 
 import pytest
@@ -31,6 +31,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
 from syrupy.assertion import SnapshotAssertion
 
+from custom_components.alwaysfull.api import AlwaysFullClient
 from custom_components.alwaysfull.const import DOMAIN
 from custom_components.alwaysfull.coordinator import BowlData
 from custom_components.alwaysfull.exceptions import AlwaysFullAuthError
@@ -93,6 +94,67 @@ def zone_unlike_host() -> tuple[str, int]:
 
     msg = f"No candidate zone differs from the host offset {host_offset}"
     raise RuntimeError(msg)
+
+
+class _FakeHttpResponse:
+    """Minimal async-context-manager response, standing in for aiohttp's."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.status = 200
+        self._payload = payload
+
+    async def json(self, content_type: str | None = None) -> dict[str, Any]:
+        """Return the canned envelope, whatever content type was asked for."""
+        return self._payload
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FakeHttpSession:
+    """Answers every request with one canned envelope, with no I/O."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def request(self, method: str, url: str, **kwargs: Any) -> _FakeHttpResponse:
+        """Return the canned response, ignoring everything about the request."""
+        return _FakeHttpResponse(self._payload)
+
+
+async def vendor_error(code: str, *, on_login: bool = False, msg: str = "vendor refused") -> Exception:
+    """Return the exception the REAL client raises for envelope `code`.
+
+    This deliberately crosses a layer boundary. Which exception class a
+    vendor code becomes is `api.py`'s decision, and what that class then
+    does to the user is `coordinator.py`'s; a coordinator test handed a
+    hand-picked exception class proves only the second half, and a
+    mis-classification in the first half stays invisible. Building the
+    error from the real client means the pair is asserted together --
+    which is exactly the seam where a transient `652` bricked a live
+    install for four minutes.
+
+    `on_login` chooses which endpoint answers, because for `652`/`602`
+    that is what decides the meaning: from the login call the credentials
+    really were rejected, from a token-bearing call the SESSION was.
+    """
+    client = AlwaysFullClient(
+        _FakeHttpSession({"code": code, "msg": msg, "data": None}),
+        token="",
+        tz_offset_hours=0,
+    )
+    try:
+        if on_login:
+            await client.login("user@example.com", "pw")
+        else:
+            await client.device_list()
+    except Exception as err:  # noqa: BLE001 -- returning it IS the point
+        return err
+    msg = f"code {code} raised nothing"
+    raise AssertionError(msg)
 
 
 def load_fixture_data(name: str) -> Any:

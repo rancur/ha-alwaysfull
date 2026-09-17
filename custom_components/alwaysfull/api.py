@@ -31,6 +31,7 @@ from .const import (
     APP_TYPE,
     APP_VERSION,
     CODE_OK,
+    CODE_RATE_LIMITED,
     CODE_TOKEN_EXPIRED,
     CREDENTIAL_REJECTION_CODES,
     SIGN_SECRET,
@@ -214,6 +215,16 @@ class AlwaysFullClient:
 
         if code == CODE_OK:
             return payload.get("data")
+        if code == CODE_RATE_LIMITED:
+            # THE vendor rate limit. It arrives in the envelope, under HTTP
+            # 200 -- the 429 branch above has never fired against the live
+            # service. See `const.CODE_RATE_LIMITED` for the caveat that
+            # this code is also returned by two endpoints this integration
+            # does not call, which we cannot distinguish from a genuine
+            # rate limit and do not need to: both mean back off and retry.
+            raise AlwaysFullRateLimitError(
+                payload.get("msg") or "Too many requests, please try again later"
+            )
         if code == CODE_TOKEN_EXPIRED:
             raise AlwaysFullAuthError(payload.get("msg") or "Token expired")
         if code in CREDENTIAL_REJECTION_CODES:

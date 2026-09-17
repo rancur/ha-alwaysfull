@@ -42,6 +42,7 @@ from .conftest import (
     FROZEN_ZONE,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
+    vendor_error,
     zone_unlike_host,
 )
 
@@ -311,6 +312,32 @@ async def test_rate_limit_is_never_mapped_to_auth_failure(
     assert isinstance(coordinator.last_exception, UpdateFailed)
     assert not isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
     assert mock_api.login_calls == []
+
+
+async def test_the_vendors_own_rate_limit_code_never_reaches_reauth(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """603 is THE vendor rate limit, and it must degrade rather than reauth.
+
+    The error here is built by the REAL client from a real `603` envelope,
+    not hand-picked, so this fails if `api.py` ever stops classifying that
+    code as a rate limit -- which is the state this integration shipped in,
+    with every rate limit reaching users as a generic failure.
+    """
+    coordinator = await _setup(hass)
+    mock_api.fail_device_list(await vendor_error("603", msg="Too many requests, please try again later."))
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert not isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert mock_api.login_calls == []
+    # The MESSAGE, not just the class. Every unclassified vendor code also
+    # becomes `UpdateFailed`, so the class alone is satisfied by the
+    # generic-error branch that shipped this bug; what the log says is the
+    # only place the two differ.
+    assert "rate-limited" in str(coordinator.last_exception)
 
 
 @pytest.mark.parametrize(
