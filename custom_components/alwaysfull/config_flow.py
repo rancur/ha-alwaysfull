@@ -61,7 +61,7 @@ from .const import (
     MIN_SCAN_INTERVAL,
 )
 from .coordinator import ha_utc_offset_hours
-from .exceptions import AlwaysFullAuthError, AlwaysFullRateLimit
+from .exceptions import AlwaysFullAuthError, AlwaysFullRateLimitError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -209,7 +209,7 @@ class AlwaysFullConfigFlow(ConfigFlow, domain=DOMAIN):
             token = await client.login(email, password)
         except AlwaysFullAuthError:
             return {"base": "invalid_auth"}, ""
-        except (AlwaysFullRateLimit, TimeoutError, aiohttp.ClientError):
+        except (AlwaysFullRateLimitError, TimeoutError, aiohttp.ClientError):
             # A rate limit is not an authentication problem: sending the user
             # to "check your password" for a 429 is how people end up
             # changing credentials that were never wrong.

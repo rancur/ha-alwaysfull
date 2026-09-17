@@ -7,3 +7,78 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py313"
+line-length = 120
+
+# The rule selection is declared explicitly and in full. Leaving it implicit
+# means `ruff check .` resolves a different rule set per ruff version and per
+# machine -- the set that passed here at the time of writing was neither
+# ruff's documented default nor "everything", so a clean local run said
+# nothing about CI. Every entry below is chosen for this project; nothing is
+# selected merely because it happens to pass today.
+[tool.ruff.lint]
+select = [
+    "A",      # shadowing a builtin
+    "ASYNC",  # blocking calls inside async def -- this is an async integration
+    "B",      # bugbear
+    "BLE",    # blind except
+    "C4",     # comprehensions
+    "D",      # docstrings: Home Assistant requires them on public API
+    "DTZ",    # naive datetimes: every daily total here depends on the zone
+    "E",      # pycodestyle errors
+    "EM",     # exception messages assigned before raising
+    "F",      # pyflakes
+    "FA",     # `from __future__ import annotations`
+    "FURB",   # modernisation
+    "G",      # logging-format correctness (no f-strings in log calls)
+    "I",      # import sorting
+    "INP",    # implicit namespace packages
+    "ISC",    # implicit string concatenation
+    "LOG",    # logging misuse
+    "N",      # pep8 naming
+    "PERF",
+    "PGH",    # blanket noqa / type-ignore
+    "PIE",
+    "PL",     # pylint
+    "PT",     # pytest style
+    "PTH",    # pathlib over os.path
+    "PYI",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",      # bandit: this integration handles credentials
+    "SIM",
+    "SLF",    # private-member access across objects
+    "T20",    # no print() in an integration
+    "TC",     # runtime vs type-checking imports
+    "TID",    # tidy imports
+    "TRY",    # exception anti-patterns
+    "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
+    "YTT",
+]
+ignore = [
+    "D203",    # incompatible with D211; HA uses D211 (no blank line before class docstring)
+    "D213",    # incompatible with D212; HA uses D212 (summary on the first line)
+    "TRY003",  # long messages at the raise site are clearer than an exception subclass per string
+    "TRY400",  # `LOGGER.error` in an except block is deliberate where no traceback is wanted
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The vendor's signing scheme mandates MD5 and md5(md5(password)); neither is
+# a security decision we get to make, and both are documented as such in api.py.
+"custom_components/alwaysfull/api.py" = ["S324"]
+# `SIGN_SECRET` is the vendor protocol's published signing constant and
+# `CODE_TOKEN_EXPIRED` is an API response code -- neither is a credential.
+"custom_components/alwaysfull/const.py" = ["S105"]
+"tests/*" = [
+    "S101",    # asserts ARE the tests
+    "S105",    # every token/password literal in the suite is synthetic
+    "S106",
+    "S107",
+    "PLR2004", # an expected value in an assertion is not a magic number
+    "SLF001",  # tests exercise private helpers on purpose
+    "D103",    # a test's name is its description; docstrings stay optional
+    "N802",    # test names quote vendor wire keys verbatim (e.g. filterCapacity)
+    "TC002",   # test modules keep imports at runtime: nothing imports them, so
+    "TC003",   # the type-checking indirection buys nothing and hurts fixtures
+]

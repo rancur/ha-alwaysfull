@@ -219,7 +219,7 @@ def mock_api() -> Generator[FakeAlwaysFullClient]:
 
 @pytest.fixture
 def mock_api_auth_fails(mock_api: FakeAlwaysFullClient) -> FakeAlwaysFullClient:
-    """A client whose token is rejected AND whose re-login is rejected too."""
+    """Return a client whose token is rejected AND whose re-login fails too."""
     mock_api.fail_device_list(AlwaysFullAuthError("Token expired"))
     mock_api.login_error = AlwaysFullAuthError("Account or password error")
     return mock_api

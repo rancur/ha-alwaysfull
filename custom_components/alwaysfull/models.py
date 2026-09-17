@@ -54,6 +54,12 @@ UNITS_FLUID_OUNCES = 2
 DEVICE_TYPE_9_INCH = 0
 DEVICE_TYPE_7_INCH = 1
 
+# The same two bowls as the sizes a human reads off the product, which is what
+# the UI side of the conversion deals in. Named so the inversion above stays
+# legible at each call site.
+BOWL_SIZE_9_INCH = 9
+BOWL_SIZE_7_INCH = 7
+
 SLAVE_TYPE_NONE = 0
 SLAVE_TYPE_BOTTLE_PUMP = 1
 SLAVE_TYPE_WALL_UNIT = 2
@@ -80,12 +86,12 @@ def device_type_to_bowl_size_inches(device_type: int) -> int:
     than raising, since an unrecognised device type should not take down a
     coordinator update.
     """
-    return 7 if device_type == DEVICE_TYPE_7_INCH else 9
+    return BOWL_SIZE_7_INCH if device_type == DEVICE_TYPE_7_INCH else BOWL_SIZE_9_INCH
 
 
 def bowl_size_inches_to_device_type(inches: int) -> int:
     """Convert a bowl size in inches (UI) to the vendor's inverted enum (wire)."""
-    return DEVICE_TYPE_7_INCH if inches == 7 else DEVICE_TYPE_9_INCH
+    return DEVICE_TYPE_7_INCH if inches == BOWL_SIZE_7_INCH else DEVICE_TYPE_9_INCH
 
 
 def filter_life_percent(state: dict[str, Any]) -> float | None:
@@ -172,14 +178,17 @@ class BowlState:
 
     @property
     def has_injection_alarm(self) -> bool:
+        """Return whether the bowl reports a water-fill alarm."""
         return self.injection_alarm == 1
 
     @property
     def has_pump_alarm(self) -> bool:
+        """Return whether the bowl reports a pump alarm."""
         return self.pump_alarm == 1
 
     @property
     def has_horizontal_alarm(self) -> bool:
+        """Return whether the bowl reports being off level."""
         return self.horizontal_alarm == 1
 
     @property
@@ -269,6 +278,7 @@ class BowlConfig:
 
     @property
     def flush_interval_minutes(self) -> int:
+        """Return the flush interval in minutes (stored as seconds)."""
         return self.clean_cycle_seconds // SECONDS_PER_MINUTE
 
     @flush_interval_minutes.setter
@@ -279,6 +289,7 @@ class BowlConfig:
 
     @property
     def filter_life_months(self) -> int:
+        """Return the filter life in months (stored as seconds)."""
         return self.filter_can_use_time_seconds // SECONDS_PER_MONTH
 
     @filter_life_months.setter
@@ -287,6 +298,7 @@ class BowlConfig:
 
     @property
     def filter_capacity_ml(self) -> int | None:
+        """Return the filter capacity in millilitres, or `None` if unset."""
         return self.filter_capacity_raw
 
     @filter_capacity_ml.setter
@@ -297,6 +309,7 @@ class BowlConfig:
 
     @property
     def maintenance_interval_days(self) -> int:
+        """Return the maintenance interval in days (stored as seconds)."""
         return self.device_can_use_time_seconds // SECONDS_PER_DAY
 
     @maintenance_interval_days.setter
@@ -307,6 +320,7 @@ class BowlConfig:
 
     @property
     def sleep_start(self) -> datetime.time:
+        """Return the sleep-window start as a time of day."""
         return minutes_to_time(self.sleep_start_minutes)
 
     @sleep_start.setter
@@ -315,6 +329,7 @@ class BowlConfig:
 
     @property
     def sleep_end(self) -> datetime.time:
+        """Return the sleep-window end as a time of day."""
         return minutes_to_time(self.sleep_end_minutes)
 
     @sleep_end.setter
@@ -325,6 +340,7 @@ class BowlConfig:
 
     @property
     def bowl_size_inches(self) -> int | None:
+        """Return the bowl size in inches, or `None` if the config omits it."""
         if self.device_type_raw is None:
             return None
         return device_type_to_bowl_size_inches(self.device_type_raw)

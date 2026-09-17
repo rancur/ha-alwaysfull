@@ -46,7 +46,7 @@ from .const import (
     MIN_SCAN_INTERVAL,
     NOTIFY_CONFIG_EVERY_N_POLLS,
 )
-from .exceptions import AlwaysFullAuthError, AlwaysFullError, AlwaysFullRateLimit
+from .exceptions import AlwaysFullAuthError, AlwaysFullError, AlwaysFullRateLimitError
 from .models import BowlConfig, BowlState
 
 if TYPE_CHECKING:
@@ -150,14 +150,15 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 return await self._async_fetch_all()
         except AlwaysFullAuthError as err:
             # Second failure: the stored credentials really are wrong.
-            raise ConfigEntryAuthFailed(
-                "Always Full rejected the stored credentials"
-            ) from err
-        except AlwaysFullRateLimit as err:
-            raise UpdateFailed("Always Full rate-limited this request") from err
+            msg = "Always Full rejected the stored credentials"
+            raise ConfigEntryAuthFailed(msg) from err
+        except AlwaysFullRateLimitError as err:
+            msg = "Always Full rate-limited this request"
+            raise UpdateFailed(msg) from err
         except (TimeoutError, aiohttp.ClientError, ValueError, AlwaysFullError) as err:
             # ValueError covers json.JSONDecodeError from a malformed body.
-            raise UpdateFailed(f"Error talking to Always Full: {err}") from err
+            msg = f"Error talking to Always Full: {err}"
+            raise UpdateFailed(msg) from err
 
     async def _async_relogin(self) -> None:
         """Re-login with the stored credentials, refreshing the client token.

@@ -32,9 +32,15 @@ from .const import (
     APP_VERSION,
     CODE_OK,
     CODE_TOKEN_EXPIRED,
+    CREDENTIAL_REJECTION_CODES,
     SIGN_SECRET,
 )
-from .exceptions import AlwaysFullAuthError, AlwaysFullError, AlwaysFullRateLimit
+from .exceptions import (
+    AlwaysFullAuthError,
+    AlwaysFullCredentialsError,
+    AlwaysFullError,
+    AlwaysFullRateLimitError,
+)
 
 if TYPE_CHECKING:
     import aiohttp
@@ -201,7 +207,7 @@ class AlwaysFullClient:
         """Map an HTTP response onto the vendor's {code, msg, data} envelope."""
         if resp.status == _HTTP_TOO_MANY_REQUESTS:
             msg = "Server responded 429 Too Many Requests"
-            raise AlwaysFullRateLimit(msg)
+            raise AlwaysFullRateLimitError(msg)
 
         payload = await resp.json(content_type=None)
         code = str(payload.get("code"))
@@ -210,7 +216,18 @@ class AlwaysFullClient:
             return payload.get("data")
         if code == CODE_TOKEN_EXPIRED:
             raise AlwaysFullAuthError(payload.get("msg") or "Token expired")
+        if code in CREDENTIAL_REJECTION_CODES:
+            # Distinct from the token-expiry case above (see exceptions.py)
+            # but still an `AlwaysFullAuthError`, so every existing caller --
+            # the coordinator's one-silent-re-login path included -- behaves
+            # exactly as before.
+            raise AlwaysFullCredentialsError(
+                payload.get("msg") or "Invalid email address or password"
+            )
 
+        # Anything unclassified stays a plain error: guessing that an unknown
+        # code means "bad credentials" would push users into a reauth flow
+        # that cannot fix whatever actually went wrong.
         raise AlwaysFullError(payload.get("msg") or f"Unexpected response code {code}")
 
     # -- Endpoint methods ---------------------------------------------------

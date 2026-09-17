@@ -19,7 +19,7 @@ from custom_components.alwaysfull.coordinator import (
 from custom_components.alwaysfull.exceptions import (
     AlwaysFullAuthError,
     AlwaysFullError,
-    AlwaysFullRateLimit,
+    AlwaysFullRateLimitError,
 )
 
 from .conftest import (
@@ -203,7 +203,7 @@ async def test_rate_limit_is_never_mapped_to_auth_failure(
 ) -> None:
     """429 means slow down, not "bad credentials" -- mapping it to reauth traps the user."""
     coordinator = await _setup(hass)
-    mock_api.fail_device_list(AlwaysFullRateLimit("429"))
+    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
 
     await coordinator.async_refresh()
 
@@ -305,7 +305,7 @@ async def test_refresh_after_write_rereads_that_device_config(
     assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 60
 
     mock_api.device_config_override = load_fixture_data("device_config") | {"cleanCycle": 1800}
-    mock_api.fail_device_list(AlwaysFullRateLimit("429"))
+    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
 
     await coordinator.async_refresh_after_write(DEVICE_ID)
 

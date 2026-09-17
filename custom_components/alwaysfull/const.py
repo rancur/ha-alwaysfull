@@ -22,7 +22,26 @@ MAX_SCAN_INTERVAL = 600
 NOTIFY_CONFIG_EVERY_N_POLLS = 10
 
 CODE_OK = "200"
+
+# The session token was rejected. The credentials may still be fine, so this
+# is worth exactly one silent re-login.
 CODE_TOKEN_EXPIRED = "651"
+
+# The email/password pair itself was rejected. Verified against the live API:
+# a real account with a deliberately wrong password AND an email with no
+# account BOTH answer `652 "Invalid email address or password."`, so these two
+# cases are NOT distinguishable and no logic may try to tell them apart.
+CODE_CREDENTIALS_REJECTED = "652"
+
+# Observed once from the same login endpoint and not reproducible on demand.
+# Its exact meaning is unknown; what is certain is that it is a refusal to
+# authenticate, and treating a refusal as anything else would strand the user
+# on "unexpected error" instead of "check your password".
+CODE_CREDENTIALS_REJECTED_ALT = "602"
+
+CREDENTIAL_REJECTION_CODES = frozenset(
+    {CODE_CREDENTIALS_REJECTED, CODE_CREDENTIALS_REJECTED_ALT}
+)
 
 ALERT_TYPES = [
     "Tilted",

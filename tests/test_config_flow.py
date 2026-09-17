@@ -26,9 +26,11 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.alwaysfull.config_flow import AlwaysFullConfigFlow
 from custom_components.alwaysfull.const import (
+    API_BASE,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -37,7 +39,7 @@ from custom_components.alwaysfull.coordinator import scan_interval_seconds
 from custom_components.alwaysfull.exceptions import (
     AlwaysFullAuthError,
     AlwaysFullError,
-    AlwaysFullRateLimit,
+    AlwaysFullRateLimitError,
 )
 
 from .conftest import FakeAlwaysFullClient
@@ -146,7 +148,7 @@ async def test_user_flow_creates_entry(
         (AlwaysFullAuthError("Account or password error"), "invalid_auth"),
         (aiohttp.ClientError("boom"), "cannot_connect"),
         (TimeoutError(), "cannot_connect"),
-        (AlwaysFullRateLimit("429"), "cannot_connect"),
+        (AlwaysFullRateLimitError("429"), "cannot_connect"),
         (AlwaysFullError("Unexpected response code 500"), "unknown"),
         (RuntimeError("something else entirely"), "unknown"),
     ],
@@ -167,6 +169,49 @@ async def test_user_flow_login_failures(
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
+    assert result["errors"] == {"base": expected}
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        # Verified live: a wrong password answers 652, NOT 651. Getting this
+        # wrong is the single most likely thing a real user hits on first
+        # setup, and it used to reach them as "unexpected error".
+        (652, "invalid_auth"),
+        (602, "invalid_auth"),
+        (651, "invalid_auth"),
+        (500, "unknown"),
+    ],
+)
+async def test_user_flow_maps_real_vendor_codes(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    code: int,
+    expected: str,
+) -> None:
+    """End to end over the REAL client: a vendor code becomes a UI error key.
+
+    Deliberately not using the fake client. Every other error test here
+    injects an exception, which means they all passed while `652` was in
+    fact falling through to `unknown` -- the mapping from wire code to error
+    key was simply never covered. This is the test that would have caught it.
+    """
+    aioclient_mock.post(
+        f"{API_BASE}/app/user/login",
+        json={"code": code, "msg": "Invalid email address or password.", "data": None},
+    )
+
+    with patch(
+        "custom_components.alwaysfull.async_setup_entry", AsyncMock(return_value=True)
+    ):
+        flow_id = await _start_user_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_EMAIL: EMAIL, CONF_PASSWORD: NEW_PASSWORD}
+        )
+
+    assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": expected}
     assert not hass.config_entries.async_entries(DOMAIN)
 

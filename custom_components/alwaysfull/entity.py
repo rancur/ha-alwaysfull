@@ -35,7 +35,7 @@ class AlwaysFullEntity(CoordinatorEntity[AlwaysFullCoordinator]):
 
     @property
     def bowl(self) -> BowlData | None:
-        """This entity's bowl from the last poll, or `None` if it vanished."""
+        """Return this entity's bowl from the last poll, or `None` if it vanished."""
         return (self.coordinator.data or {}).get(self._device_id)
 
     @property

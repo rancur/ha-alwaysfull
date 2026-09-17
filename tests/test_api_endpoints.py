@@ -33,7 +33,11 @@ import pytest
 
 from custom_components.alwaysfull.api import AlwaysFullClient
 from custom_components.alwaysfull.const import API_BASE
-from custom_components.alwaysfull.exceptions import AlwaysFullAuthError, AlwaysFullError
+from custom_components.alwaysfull.exceptions import (
+    AlwaysFullAuthError,
+    AlwaysFullCredentialsError,
+    AlwaysFullError,
+)
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
 
@@ -109,21 +113,52 @@ async def test_login_stores_token_on_client():
     assert client.token == "TOKEN123"
 
 
+# --- shared auth failure -------------------------------------------------
+#
+# Verified against the live API: a real account with a deliberately wrong
+# password and an email with no account at all BOTH answer
+# `652 "Invalid email address or password."`. An earlier reading of 602 as
+# "unknown email" and 652 as "known email, wrong password" is DISPROVEN --
+# nothing may try to tell those two cases apart.
+#
+# These assert the exact class, not `AlwaysFullError`: every one of these is
+# an `AlwaysFullError` by inheritance, so `pytest.raises(AlwaysFullError)`
+# would pass no matter which branch the code took. That is precisely how the
+# original 602 test passed while a mistyped password reached users as
+# "unexpected error".
+
+
 @pytest.mark.asyncio
-async def test_login_wrong_password_raises_base_error():
-    client, _ = _client({"code": "602", "msg": "Invalid email address or password.", "data": None}, token="")
-    with pytest.raises(AlwaysFullError):
+@pytest.mark.parametrize("code", ["652", "602"])
+async def test_rejected_credentials_raise_credentials_rejected(code: str):
+    client, _ = _client(
+        {"code": code, "msg": "Invalid email address or password.", "data": None}, token=""
+    )
+    with pytest.raises(AlwaysFullCredentialsError):
         await client.login("user@example.com", "wrong")
 
 
-# --- shared auth failure -------------------------------------------------
+@pytest.mark.asyncio
+async def test_expired_token_raises_auth_error_but_not_credentials_rejected():
+    """651 is an auth error, and stays distinguishable from a bad password.
+
+    The coordinator answers the two differently in principle -- one silent
+    re-login for an expired token, straight to reauth for wrong credentials
+    -- so collapsing them into one class would throw that away.
+    """
+    client, _ = _client({"code": "651", "msg": "token expired", "data": None}, token="x")
+    with pytest.raises(AlwaysFullAuthError) as err:
+        await client.device_list()
+    assert not isinstance(err.value, AlwaysFullCredentialsError)
 
 
 @pytest.mark.asyncio
-async def test_expired_token_raises_auth_error():
-    client, _ = _client({"code": "651", "msg": "token expired", "data": None}, token="x")
-    with pytest.raises(AlwaysFullAuthError):
+async def test_unclassified_code_is_not_an_auth_error():
+    """An unknown code must not be guessed into a reauth the user cannot fix."""
+    client, _ = _client({"code": "500", "msg": "server exploded", "data": None}, token="x")
+    with pytest.raises(AlwaysFullError) as err:
         await client.device_list()
+    assert not isinstance(err.value, AlwaysFullAuthError)
 
 
 # --- device_list ---------------------------------------------------------

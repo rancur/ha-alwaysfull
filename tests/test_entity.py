@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.alwaysfull.const import DOMAIN
 from custom_components.alwaysfull.entity import AlwaysFullEntity
-from custom_components.alwaysfull.exceptions import AlwaysFullRateLimit
+from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
 
 from .conftest import DEVICE_ID, FakeAlwaysFullClient
 
@@ -57,7 +57,7 @@ async def test_available_tracks_update_success_and_membership(
     entity = await _entity(hass)
     assert entity.available is True
 
-    mock_api.fail_device_list(AlwaysFullRateLimit("429"))
+    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
     await entity.coordinator.async_refresh()
     assert entity.available is False
 

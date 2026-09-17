@@ -152,8 +152,11 @@ async def test_no_explicit_tz_offset_falls_back_to_os_value(monkeypatch: pytest.
 async def test_none_valued_params_are_stripped_from_json_body_and_signature(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A None-valued caller param must not appear in the sent body, and the
-    signed key set must exactly match the sent key set."""
+    """A None-valued caller param must not reach the wire.
+
+    The signed key set must exactly match the sent key set, or the server
+    rejects the signature.
+    """
     monkeypatch.setattr(api_module, "_local_time_zone_offset_hours", lambda: -7)
     session = _FakeSession()
     client = AlwaysFullClient(session=session, token="tok123")
