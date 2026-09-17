@@ -62,6 +62,12 @@ class ConfigGroup:
     through a `to_*_payload()` builder that reconstructs the whole group
     from the cached config.
 
+    A builder can only reconstruct what the config read gave it, so a
+    payload carrying a `None` is a partial group wearing a full group's
+    shape -- `api.py` strips the `None` out before signing and the vendor
+    blanks the field. `_reject_partial_group` refuses those rather than
+    sending them; see its docstring.
+
     `build` takes the bowl as well as the config because `waterConfig` has
     to echo `units`, which lives on the device row and not in the config
     object at all.
@@ -98,6 +104,42 @@ LOG_GROUP = ConfigGroup(
     build=lambda config, device_id, _bowl: config.to_log_payload(device_id),
     send=lambda client, payload: client.set_log_config(**payload),
 )
+
+
+def _reject_partial_group(payload: dict[str, Any]) -> None:
+    """Refuse a config-group write that would blank the fields it omits.
+
+    A `None` in a built payload does NOT reach the vendor as a null.
+    `AlwaysFullClient.request` strips `None` values out of the body before
+    signing it, so the group arrives SHORTER than it should be -- and these
+    endpoints replace the whole object they are sent, blanking whatever is
+    missing. A `None` here is therefore a silent write of a value nobody
+    chose.
+
+    It happens when the config read this cache was filled from came back
+    empty or short: `/app/device/config` answering `data: null` is what the
+    coordinator's `or {}` already anticipates, and `BowlConfig.from_api({})`
+    leaves `cleanTime`, `fillWashState`, `sleepState`, `filterCapacity`,
+    `cleanWarnTime` and `logState` all `None`. The next setting the user
+    changes inside that poll window would then wipe their flush duration,
+    or send `filterCanUseTime: 0` and disable filter tracking entirely.
+
+    Substituting each missing field's default would be the same corruption
+    with extra steps: it writes a value the user never chose and reports
+    success. Refusing is recoverable -- the next poll refills the cache --
+    and it is the only outcome that never loses a setting, so the message
+    is written for the person who pressed the control and names the fields
+    so a bug report can carry them.
+    """
+    unread = sorted(key for key, value in payload.items() if value is None)
+    if not unread:
+        return
+    msg = (
+        "Always Full could not send this setting because the bowl's "
+        f"configuration has not been read yet ({', '.join(unread)} unknown). "
+        "Nothing was changed. Try again in a few moments."
+    )
+    raise HomeAssistantError(msg)
 
 
 def account_key(entry: ConfigEntry) -> str:
@@ -213,6 +255,7 @@ class AlwaysFullWriteEntity(AlwaysFullEntity):
             # are written for a human to read, so they are surfaced as-is
             # rather than replaced with a generic failure.
             raise HomeAssistantError(str(err)) from err
+        _reject_partial_group(payload)
         await self.async_write(lambda: group.send(self.coordinator.client, payload))
 
     async def async_write(self, action: Callable[[], Awaitable[Any]]) -> None:
