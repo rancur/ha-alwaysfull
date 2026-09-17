@@ -1,0 +1,107 @@
+# Home Assistant integration quality scale, tracked for Always Full.
+#
+# Custom integrations are not awarded a tier by Home Assistant -- the scale
+# is applied to core integrations. This file is kept anyway, as the
+# checklist that says what has actually been done and what has not, so the
+# answer to "does this integration handle X?" is a line in a file rather
+# than a reading of the source.
+#
+# Every `exempt` below states WHY. An exemption without a reason is
+# indistinguishable from a rule nobody got to.
+#
+# Bronze and Silver are tracked in full. Gold and Platinum are not, with
+# the exception of the two discovery rules, which are recorded here because
+# "no discovery" is a permanent property of this hardware rather than
+# unfinished work, and because it is the question every reader asks first.
+
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: |
+      The integration registers no service actions. Everything writable is
+      writable through an entity (number, switch, select, time, button),
+      which is the interface Home Assistant already gives those platforms.
+  appropriate-polling: done
+  brands:
+    status: exempt
+    comment: |
+      home-assistant/brands stopped accepting new custom components in
+      Home Assistant 2026.3, so there is no PR to open. The icon ships in
+      this repository instead, at
+      custom_components/alwaysfull/brand/icon.png (512x512 PNG), ready to
+      submit should that path reopen.
+  common-modules: done
+  config-flow-test-coverage: done
+  config-flow: done
+  dependency-transparency:
+    status: exempt
+    comment: |
+      The integration has no third-party requirements at all
+      (`"requirements": []`). The vendor protocol is undocumented and had
+      no client, so the HTTP transport was written here, in api.py, where
+      it is reviewable in the same repository rather than pulled from a
+      package nobody else audits.
+  docs-actions:
+    status: exempt
+    comment: The integration registers no service actions.
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no condition platform.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: |
+      The integration provides no device-trigger platform. Alerts are
+      surfaced as an `event` entity, which Home Assistant already exposes
+      to automations through the standard `state` trigger, and the README
+      shows exactly that.
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: The integration registers no service actions.
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage:
+    status: done
+    comment: |
+      349 tests, 140 snapshots, 97% statement coverage of
+      custom_components/alwaysfull as measured by
+      `pytest --cov=custom_components.alwaysfull`. The Silver threshold is
+      95%. The figure is recorded with the command that produces it
+      because a bare percentage in a checklist ages badly and cannot be
+      re-checked.
+
+  # Gold -- not otherwise tracked; see the header.
+  discovery:
+    status: exempt
+    comment: |
+      There is nothing to discover. A full TCP scan of the device across
+      all 65,535 ports found ZERO open ports: it is a Bouffalo Lab BL602
+      running a pure outbound cloud client, and it never listens. There is
+      no Zeroconf, SSDP, DHCP or local HTTP surface to match on, so no
+      manifest discovery key could ever fire. This is a property of the
+      hardware, not a gap in the integration.
+  discovery-update-info:
+    status: exempt
+    comment: |
+      Follows from `discovery`: with no local discovery protocol there is
+      no discovery payload to refresh a device's connection details from.
+      The device has no local address worth tracking -- every byte of
+      communication goes through the vendor's cloud.

@@ -155,7 +155,14 @@ def _last_alert(bowl: BowlData) -> StateType:
     row = _newest_notification(bowl)
     if row is None:
         return None
-    return ALERT_TYPE_OPTIONS.get(row.get("type"), UNKNOWN)
+    raw_type = row.get("type")
+    # The `isinstance` is not a formality. `dict.get` HASHES its argument,
+    # so a vendor `type` that arrived as a list or a dict would raise
+    # `TypeError` here -- inside a coordinator listener, where it breaks
+    # the update for every other entity on the bowl, not just this one.
+    if not isinstance(raw_type, str):
+        return UNKNOWN
+    return ALERT_TYPE_OPTIONS.get(raw_type, UNKNOWN)
 
 
 def _last_alert_attributes(bowl: BowlData) -> dict[str, Any]:

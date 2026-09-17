@@ -232,10 +232,15 @@ class AlwaysFullAlertEvent(AlwaysFullEntity, EventEntity):
         self._remember(row.get("id"))
         raw_type = row.get("type")
         # `.get` on a non-hashable value would raise, and this runs inside a
-        # coordinator listener where raising breaks the whole update.
-        key = raw_type if isinstance(raw_type, str) else None
+        # coordinator listener where raising breaks the whole update. The
+        # narrowing is done BEFORE the lookup rather than by passing a
+        # `str | None` key, which is the same runtime behaviour but is a
+        # type error `dict.get` happens not to catch at runtime.
+        event_type = (
+            ALERT_TYPE_OPTIONS.get(raw_type, UNKNOWN) if isinstance(raw_type, str) else UNKNOWN
+        )
         self._trigger_event(
-            ALERT_TYPE_OPTIONS.get(key, UNKNOWN),
+            event_type,
             {
                 ATTR_MESSAGE: row.get("msg"),
                 ATTR_CREATED: row.get("createTime"),
