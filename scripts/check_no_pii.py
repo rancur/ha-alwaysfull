@@ -130,6 +130,75 @@ SYNTHETIC_DEVICE_IDS = {
 ACCOUNT_KEY_LENGTH = 12
 DERIVED_ACCOUNT_KEY = hashlib.sha256(CANONICAL_EMAIL.encode()).hexdigest()[:ACCOUNT_KEY_LENGTH]
 
+# The separators a MAC address is written with, stripped before the
+# twelve-hex test so that every rendering collapses to one comparison.
+#
+# This rule used to match only a BARE twelve-hex run, which meant the
+# canonical spelling walked straight past it: `aa:bb:...` exits 0 while the
+# identical value without colons exits 1. That is not a corner case. It is
+# how Home Assistant itself writes a MAC (`format_mac()`, and every
+# `CONNECTION_NETWORK_MAC` entry in a device registry), how every router UI
+# displays one, and how a person pastes one into an issue. The concrete
+# leak: adding `connections={(CONNECTION_NETWORK_MAC, format_mac(device_id))}`
+# to `device_info` is a completely standard thing to do for a networked
+# device, and it would have published with this guard green.
+#
+# Normalising is deliberately preferred over adding a regex per spelling:
+# one more rendering nobody listed is one more silent miss, whereas a
+# candidate that normalises to twelve hex characters is a MAC however it
+# was punctuated.
+MAC_SEPARATORS = str.maketrans("", "", ":-.")
+
+
+# --------------------------------------------------------------------------
+# Words that must never appear, stored WITHOUT the plaintext
+# --------------------------------------------------------------------------
+
+# The owner's name must fail the build. Writing it here in plain text would
+# put it in the repository permanently -- in this file, and in this file's
+# own history -- which is precisely what the guard exists to prevent, and
+# the same argument that drove the device-id rule to be inverted rather
+# than to name the banned id.
+#
+# So the name is stored as a digest instead. Every alphabetic run of four
+# or more characters is lowercased and hashed, and a token whose digest is
+# listed here is a finding. The plaintext never enters the repository and
+# the rule still fires.
+#
+# NOT a security control, and not claimed to be one: a surname is a
+# dictionary word to anyone who wants to try, so these digests are not
+# irreversible. They exist so the value is not sitting in plain text in a
+# file people read. Same standard, and the same honest limit, as the
+# device labels in `diagnostics.py`.
+WORD_DIGEST_LENGTH = 16
+
+# Four, because every name this covers is longer than that and because
+# hashing every two-letter token in every blob in history buys nothing.
+MIN_WORD_LENGTH = 4
+
+DENIED_WORD_DIGESTS = {
+    "d28e09dad1f40a9b": "The repository owner's surname.",
+    "8bcc5527c005fff6": "The same surname pluralised -- the household.",
+    "5913d0181e68c520": (
+        "Given name and surname run together, which is how the owner's "
+        "legacy domain and several old handles spell it. Tokenising splits "
+        "on punctuation but not on a word boundary that is not there, so "
+        "the compound needs its own digest."
+    ),
+}
+
+# Deliberately NOT covered, and worth saying so rather than leaving a
+# reader to wonder: the owner's GIVEN name on its own. It is an ordinary
+# English auxiliary verb, so a digest for it would fire on "it will fail",
+# "Home Assistant will reload" and several hundred other lines of honest
+# prose. A rule that cries wolf on every page gets switched off, and a
+# switched-off rule guards nothing.
+
+
+def _word_digest(word: str) -> str:
+    """Return the truncated digest this guard compares tokens against."""
+    return hashlib.sha256(word.lower().encode()).hexdigest()[:WORD_DIGEST_LENGTH]
+
 # ---------------------------------------------------------------------------
 # 32-hex tokens
 # ---------------------------------------------------------------------------
@@ -170,6 +239,10 @@ class Rule:
         candidate = value.lower() if self.fold_case else value
         return candidate in self.allowed
 
+    def mask(self, value: str) -> str:
+        """Return the form of `value` that is safe to print in a CI log."""
+        return _mask(value)
+
 
 def _email_allowlist() -> frozenset[str]:
     """Return every literal address this repository may contain."""
@@ -189,6 +262,47 @@ class EmailRule(Rule):
             domain == reserved or domain.endswith(f".{reserved}")
             for reserved in RESERVED_EMAIL_DOMAINS
         )
+
+
+class DeviceIdRule(Rule):
+    """The device-id rule, which compares MAC renderings after normalising."""
+
+    def permits(self, value: str) -> bool:
+        """Allow only the synthetic ids, whatever punctuation was used.
+
+        `aa:bb:...`, `aa-bb-...`, `aabb.ccdd...` and the bare run are the
+        same twelve hex characters, so they are compared as the same
+        twelve hex characters.
+        """
+        return value.translate(MAC_SEPARATORS).lower() in self.allowed
+
+
+@dataclass(frozen=True)
+class HashedWordRule(Rule):
+    """A rule whose list is a DENY list of digests, not an allowlist.
+
+    Every other rule here says "this shape is suspicious unless it is one
+    of these known values". This one inverts that: ordinary words are fine,
+    and a specific few are not -- but those few cannot be written down, so
+    they are compared by digest.
+    """
+
+    denied: frozenset[str] = frozenset()
+
+    def permits(self, value: str) -> bool:
+        """Allow every token except the ones whose digest is listed."""
+        return _word_digest(value) not in self.denied
+
+    def mask(self, value: str) -> str:
+        """Redact the token ENTIRELY, not just its tail.
+
+        `_mask` keeps the first three characters, which is the right
+        trade-off for a MAC or an address -- enough for the owner to
+        recognise, useless to anyone else. It is the wrong trade-off for a
+        name: three letters of a surname in a public CI log is most of the
+        surname. The rule name and the line number are enough to find it.
+        """
+        return "*" * len(value)
 
 
 RULES: tuple[Rule, ...] = (
@@ -228,18 +342,44 @@ RULES: tuple[Rule, ...] = (
         allowed=frozenset(ALLOWED_HEX32),
         fold_case=True,
     ),
-    Rule(
+    DeviceIdRule(
         name="device-id",
-        # A bare twelve-hex run. The second lookbehind excludes the
-        # fractional part of a decimal -- `119.531736111111` is a sensor
-        # state in a snapshot, not a MAC -- while still catching a real id
-        # that happens to follow a dot. `\b` is NOT used: it treats the
-        # boundary between hex and non-hex characters inconsistently at the
-        # edges of a longer identifier.
-        pattern=re.compile(r"(?<![0-9a-fA-F])(?<!\d\.)[0-9a-fA-F]{12}(?![0-9a-fA-F])"),
-        why="a bare twelve-hex run, which is the shape of this device's MAC address",
+        # Twelve hex characters in any of the four renderings a MAC is
+        # written in. The regex only has to FIND a candidate; deciding
+        # whether it is allowed happens after the separators are stripped,
+        # in `DeviceIdRule.permits`, so a spelling nobody enumerated still
+        # collapses onto the same comparison.
+        #
+        # The second lookbehind excludes the fractional part of a decimal
+        # -- `119.531736111111` is a sensor state in a snapshot, not a MAC
+        # -- while still catching a real id that happens to follow a dot.
+        # `\b` is NOT used: it treats the boundary between hex and non-hex
+        # characters inconsistently at the edges of a longer identifier.
+        #
+        # The trailing guard is `(?![0-9a-fA-F])` and nothing more. Adding
+        # `.` or `-` to it would break a MAC at the end of a sentence,
+        # which is the same mistake the RFC1918 rule above already made
+        # once. The cost is that an unusually long punctuated hex chain can
+        # match a six-group window of itself; over-flagging is the safe
+        # direction and the allowlist is there for it.
+        pattern=re.compile(
+            r"(?<![0-9a-fA-F])(?<!\d\.)(?:"
+            r"[0-9a-fA-F]{12}"  # aabbccddeeff
+            r"|[0-9a-fA-F]{2}(?:[:-][0-9a-fA-F]{2}){5}"  # aa:bb:... and aa-bb-...
+            r"|[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}"  # aabb.ccdd.eeff
+            r")(?![0-9a-fA-F])"
+        ),
+        why="twelve hex characters, which is the shape of this device's MAC address",
         allowed=frozenset({*SYNTHETIC_DEVICE_IDS, DERIVED_ACCOUNT_KEY}),
-        fold_case=True,
+    ),
+    HashedWordRule(
+        name="owner-name",
+        # Alphabetic runs only. A name does not contain digits, and
+        # including them would hash every identifier in the tree for
+        # nothing.
+        pattern=re.compile(rf"[A-Za-z]{{{MIN_WORD_LENGTH},}}"),
+        why="a word matching a name this repository must never contain",
+        denied=frozenset(DENIED_WORD_DIGESTS),
     ),
 )
 
@@ -281,7 +421,7 @@ def _scan(text: str, where: str) -> list[Finding]:
     for number, line in enumerate(text.splitlines(), start=1):
         for rule in RULES:
             findings.extend(
-                Finding(rule.name, where, number, _mask(match), rule.why)
+                Finding(rule.name, where, number, rule.mask(match), rule.why)
                 for match in rule.pattern.findall(line)
                 if not rule.permits(match)
             )
