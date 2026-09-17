@@ -14,9 +14,11 @@ and is exercised in both directions by `tests/test_models.py`.
 Conversion constants are verbatim from the vendor client (see the design
 doc's "Traps the implementation must honour" and "Live-verified findings"):
 - `cleanCycle` (flush interval): seconds <-> minutes, 60 s/min.
-- `filterCanUseTime` / `cleanWarnTime` (filter life): seconds <-> a 30-day
-  "month", 2592000 s/month. This is a fixed 30-day unit, not a calendar
-  month.
+- `filterCanUseTime` (filter life): seconds <-> a 30-day "month",
+  2592000 s/month. This is a fixed 30-day unit, not a calendar month.
+- `cleanWarnTime`: NO conversion, in either direction. Stored and written
+  as raw seconds. It is listed here because its absence from the list is
+  exactly the sort of thing a reader assumes is an oversight; it is not.
 - `deviceCanUseTime` (maintenance interval): seconds <-> days, 86400 s/day.
 - `sleepStart` / `sleepEnd`: minutes since local midnight <-> `time`.
 - `capacity` (read) / `filterCapacity` (write): same value, different wire
@@ -392,16 +394,39 @@ class BowlConfig:
         """Whole-object payload for `set_maintenance_config` (`/app/device/maintenanceConfig`).
 
         Verbatim from the vendor's decompiled app, this endpoint's body is
-        exactly `{devNo, deviceCanUseTime, cleanWarnTime}`. The vendor's own
-        app always hard-codes `cleanWarnTime: 0` and never exposes it on any
-        screen, but the read path here still converts it seconds<->30-day
-        months, so a non-zero warn lead time can be set meaningfully -- a
-        small feature the vendor app itself doesn't have.
+        exactly `{devNo, deviceCanUseTime, cleanWarnTime}`.
+
+        `cleanWarnTime` has NO unit conversion in this module, in either
+        direction: it is read as raw seconds and written back as the same
+        raw seconds. An earlier version of this docstring claimed a
+        seconds<->30-day-months conversion existed here; it never did, and
+        anyone who believed it and divided by 2592000 on the way out would
+        turn a one-week warning into 0. Nothing exposes this field to the
+        user, so handing the device's own value straight back is the only
+        correct behaviour. If a future task DOES expose it, the conversion
+        has to be written -- it cannot be assumed.
+
+        `deviceCanUseTime`, by contrast, IS converted (seconds <-> days)
+        via `maintenance_interval_days`.
         """
         return {
             "device_id": device_id,
             "deviceCanUseTime": self.device_can_use_time_seconds,
             "cleanWarnTime": self.clean_warn_time_seconds,
+        }
+
+    def to_log_payload(self, device_id: str) -> dict[str, Any]:
+        """Whole-object payload for `set_log_config` (`/app/device/logConfig`).
+
+        `logState` is the only setting this endpoint carries, which makes
+        "whole object" and "just this field" identical TODAY. It is still
+        built here rather than inline at the call site, so that the day the
+        vendor adds a second field to the group there is one place to add
+        it and every caller picks it up.
+        """
+        return {
+            "device_id": device_id,
+            "logState": self.log_state,
         }
 
     def to_water_payload(self, device_id: str, units: int) -> dict[str, Any]:

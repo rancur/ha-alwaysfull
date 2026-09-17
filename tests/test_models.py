@@ -249,6 +249,33 @@ def test_to_water_payload_exact_key_set():
     assert set(payload) == {"device_id", "dayMinWater", "dayMaxWater", "units"}
 
 
+def test_to_log_payload_exact_key_set():
+    # logConfig carries one setting, and it is still a whole-object write.
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payload = cfg.to_log_payload("DEV")
+    assert set(payload) == {"device_id", "logState"}
+    assert payload["logState"] == 0
+
+
+def test_to_log_payload_round_trips_the_flag_as_an_int():
+    # The vendor's flags are ints. `True`/`False` are not the same wire
+    # values, and JSON would serialise them as `true`/`false`.
+    cfg = BowlConfig.from_api({"logState": 1})
+    payload = cfg.to_log_payload("DEV")
+    assert payload["logState"] == 1
+    assert payload["logState"] is not True
+
+
+def test_clean_warn_time_is_raw_seconds_with_no_month_conversion():
+    # There is NO seconds<->months conversion for cleanWarnTime anywhere in
+    # this module, and a docstring once implied there was. One week in must
+    # be one week out: a 30-day-month conversion applied here would send 0
+    # instead of 604800, an error of a factor of 2,592,000.
+    cfg = BowlConfig.from_api({"cleanWarnTime": 604800, "deviceCanUseTime": 864000})
+    assert cfg.clean_warn_time_seconds == 604800
+    assert cfg.to_maintenance_payload("DEV")["cleanWarnTime"] == 604800
+
+
 # -- deviceType: inverted 9"/7" enum --------------------------------------
 
 
@@ -325,6 +352,7 @@ def test_protocol_framing_fields_are_not_echoed_in_any_payload():
         cfg.to_filter_payload("DEV"),
         cfg.to_maintenance_payload("DEV"),
         cfg.to_water_payload("DEV", units=1),
+        cfg.to_log_payload("DEV"),
     ):
         for framing_key in ("headLength", "bodyLength", "seq", "msgCode"):
             assert framing_key not in payload
