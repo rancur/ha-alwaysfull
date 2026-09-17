@@ -18,6 +18,7 @@ from custom_components.alwaysfull.coordinator import (
 )
 from custom_components.alwaysfull.exceptions import (
     AlwaysFullAuthError,
+    AlwaysFullCredentialsError,
     AlwaysFullError,
     AlwaysFullRateLimitError,
 )
@@ -196,6 +197,70 @@ async def test_second_auth_failure_raises_config_entry_auth_failed(
     assert coordinator.last_update_success is False
     assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
     assert len(mock_api.login_calls) == 1
+
+
+async def test_rejected_credentials_skip_the_retry_entirely(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Wrong stored credentials go straight to reauth, with NO login attempt.
+
+    The server has already said this email/password pair is wrong, so the
+    silent re-login cannot succeed. Attempting it anyway would spend one
+    extra vendor request on every poll for as long as the entry is broken,
+    which is why `login_calls` being empty is the assertion that matters
+    here -- `ConfigEntryAuthFailed` alone is true of the retry path too.
+    """
+    coordinator = await _setup(hass)
+    mock_api.fail_device_list(AlwaysFullCredentialsError("Invalid email address or password."))
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert mock_api.login_calls == []
+
+
+async def test_expired_token_still_gets_exactly_one_retry(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The base auth error keeps its one silent re-login -- and only one.
+
+    Guards the other side of the split: catching the subclass first must not
+    turn the token-expiry path into a no-retry path. The re-login here fails,
+    so this counts attempts on the road to reauth rather than on the happy
+    path covered by `test_auth_error_retries_login_exactly_once`.
+    """
+    coordinator = await _setup(hass)
+    mock_api.fail_device_list(AlwaysFullAuthError("Token expired"))
+    mock_api.login_error = AlwaysFullAuthError("Token expired")
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert mock_api.login_calls == ["user@example.com"]
+
+
+async def test_relogin_answered_with_rejected_credentials_reaches_reauth(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The realistic production sequence: 651 mid-session, then 652 on re-login.
+
+    The token expires (worth one retry), and the re-login comes back
+    "invalid email address or password". That subclass is raised from inside
+    the retry handler, so it cannot be caught by that handler's siblings --
+    it has to land on the outer clause and become reauth, not leak out as a
+    plain update failure.
+    """
+    coordinator = await _setup(hass)
+    mock_api.fail_device_list(AlwaysFullAuthError("Token expired"))
+    mock_api.login_error = AlwaysFullCredentialsError("Invalid email address or password.")
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert mock_api.login_calls == ["user@example.com"]
 
 
 async def test_rate_limit_is_never_mapped_to_auth_failure(

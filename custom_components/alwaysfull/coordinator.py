@@ -16,8 +16,15 @@ Error mapping is deliberately asymmetric and must stay that way:
 | -------------------------------- | ----------------------- |
 | token rejected, re-login works   | (nothing -- silent)     |
 | token rejected, re-login fails   | `ConfigEntryAuthFailed` |
+| credentials rejected (652/602)   | `ConfigEntryAuthFailed` |
 | HTTP 429                         | `UpdateFailed`          |
 | timeout / client error / bad JSON| `UpdateFailed`          |
+
+Credentials rejected is NOT the same row as a rejected token, and is not a
+retry: the server has said the stored email/password pair is wrong, so
+re-sending that same pair cannot succeed. Retrying it would buy nothing and
+cost the vendor one extra request per poll for as long as the entry stays
+broken. It goes straight to reauth.
 
 A rate limit must NEVER become `ConfigEntryAuthFailed`: the credentials are
 fine, so the reauth flow the user is pushed into would succeed, the next
@@ -46,8 +53,15 @@ from .const import (
     MIN_SCAN_INTERVAL,
     NOTIFY_CONFIG_EVERY_N_POLLS,
 )
-from .exceptions import AlwaysFullAuthError, AlwaysFullError, AlwaysFullRateLimitError
+from .exceptions import (
+    AlwaysFullAuthError,
+    AlwaysFullCredentialsError,
+    AlwaysFullError,
+    AlwaysFullRateLimitError,
+)
 from .models import BowlConfig, BowlState
+
+CREDENTIALS_REJECTED_MESSAGE = "Always Full rejected the stored credentials"
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -141,6 +155,18 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         try:
             try:
                 return await self._async_fetch_all()
+            except AlwaysFullCredentialsError as err:
+                # ORDER IS LOAD-BEARING: this is a SUBCLASS of
+                # `AlwaysFullAuthError`, so it must be caught first or the
+                # handler below silently swallows it. Swapping these two
+                # clauses looks harmless and is not.
+                #
+                # No retry here. The server has just told us the stored
+                # email/password pair is wrong; re-sending the same pair
+                # cannot succeed, and doing it anyway would spend an extra
+                # vendor request on every poll for as long as the entry
+                # stays broken. Straight to reauth, where a human can fix it.
+                raise ConfigEntryAuthFailed(CREDENTIALS_REJECTED_MESSAGE) from err
             except AlwaysFullAuthError:
                 # Exactly one silent retry. Tokens expire routinely; making
                 # the user re-enter a password that is still correct would
@@ -150,8 +176,7 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 return await self._async_fetch_all()
         except AlwaysFullAuthError as err:
             # Second failure: the stored credentials really are wrong.
-            msg = "Always Full rejected the stored credentials"
-            raise ConfigEntryAuthFailed(msg) from err
+            raise ConfigEntryAuthFailed(CREDENTIALS_REJECTED_MESSAGE) from err
         except AlwaysFullRateLimitError as err:
             msg = "Always Full rate-limited this request"
             raise UpdateFailed(msg) from err
