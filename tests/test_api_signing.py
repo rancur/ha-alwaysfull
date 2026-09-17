@@ -85,12 +85,18 @@ def test_sign_serialises_non_strings_as_compact_json():
 
     # Pins the exact canonical string for a body mixing a string, an int, a
     # bool and a nested dict, so a change to the JSON separators or to the
-    # sort-ascending key order fails this test.
+    # sort-ascending key order fails this test. The dict literal is
+    # deliberately declared in an order that differs from sorted order
+    # (meta, enabled, count, account instead of account, count, enabled,
+    # meta) so that a regression which dropped the sorted() call in
+    # canonical() and iterated insertion order instead would produce a
+    # different string and fail this assertion, rather than coincidentally
+    # matching it.
     body = {
-        "account": "user@example.com",
-        "count": 3,
-        "enabled": True,
         "meta": {"b": 2, "a": 1},
+        "enabled": True,
+        "count": 3,
+        "account": "user@example.com",
     }
     expected = f'account=user@example.com&count=3&enabled=true&meta={{"b":2,"a":1}}&0{SIGN_SECRET}'
     assert c.canonical(body, 0) == expected
