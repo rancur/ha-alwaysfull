@@ -66,6 +66,7 @@ from .entity import (
     WATER_GROUP,
     AlwaysFullWriteEntity,
     ConfigGroup,
+    async_add_bowl_entities,
 )
 from .models import UNITS_FLUID_OUNCES
 
@@ -289,12 +290,14 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one set of numbers per bowl found by the first poll."""
+    """Set up one set of numbers per bowl on the account, now or on a later poll."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        AlwaysFullNumber(coordinator, device_id, description)
-        for device_id in coordinator.data
-        for description in NUMBERS
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullNumber(coordinator, device_id, description) for description in NUMBERS
+        ),
     )
 
 

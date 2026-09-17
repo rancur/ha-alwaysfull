@@ -21,7 +21,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 
-from .entity import AlwaysFullEntity
+from .entity import AlwaysFullEntity, async_add_bowl_entities
 from .models import SLAVE_TYPE_NONE, SLAVE_TYPE_WALL_UNIT
 
 if TYPE_CHECKING:
@@ -112,12 +112,14 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one set of binary sensors per bowl found by the first poll."""
+    """Set up one set of binary sensors per bowl on the account, now or on a later poll."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        AlwaysFullBinarySensor(coordinator, device_id, description)
-        for device_id in coordinator.data
-        for description in BINARY_SENSORS
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullBinarySensor(coordinator, device_id, description) for description in BINARY_SENSORS
+        ),
     )
 
 

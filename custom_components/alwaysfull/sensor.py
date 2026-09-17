@@ -36,7 +36,7 @@ from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime, UnitOfVo
 from homeassistant.core import callback
 
 from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, UNKNOWN
-from .entity import AlwaysFullEntity
+from .entity import AlwaysFullEntity, async_add_bowl_entities
 from .models import (
     SLAVE_TYPE_BOTTLE_PUMP,
     SLAVE_TYPE_NONE,
@@ -271,12 +271,14 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one set of sensors per bowl found by the first poll."""
+    """Set up one set of sensors per bowl on the account, now or on a later poll."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        AlwaysFullSensor(coordinator, device_id, description)
-        for device_id in coordinator.data
-        for description in SENSORS
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullSensor(coordinator, device_id, description) for description in SENSORS
+        ),
     )
 
 

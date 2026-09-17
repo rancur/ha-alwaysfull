@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
 
-from .entity import SLEEP_GROUP, AlwaysFullWriteEntity
+from .entity import SLEEP_GROUP, AlwaysFullWriteEntity, async_add_bowl_entities
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -72,12 +72,14 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one sleep window per bowl found by the first poll."""
+    """Set up one sleep window per bowl on the account, now or on a later poll."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        AlwaysFullTime(coordinator, device_id, description)
-        for device_id in coordinator.data
-        for description in TIMES
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullTime(coordinator, device_id, description) for description in TIMES
+        ),
     )
 
 

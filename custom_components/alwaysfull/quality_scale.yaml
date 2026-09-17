@@ -81,7 +81,7 @@ rules:
   test-coverage:
     status: done
     comment: |
-      358 tests, 140 snapshots, 97% statement coverage of
+      373 tests, 140 snapshots, 97% statement coverage of
       custom_components/alwaysfull, as measured by
       `pytest -q --cov=custom_components.alwaysfull`. The Silver threshold
       is 95%.
@@ -92,6 +92,21 @@ rules:
       rather than trusting the number.
 
   # Gold -- not otherwise tracked; see the header.
+  dynamic-devices:
+    status: done
+    comment: |
+      Every per-bowl platform adds its entities through
+      `entity.py::async_add_bowl_entities`, which registers a coordinator
+      listener as well as adding whatever the first poll found. A bowl
+      added to the account later gets its entities on the next poll,
+      without a restart or a reload.
+
+      Recorded here although Gold is otherwise untracked, because this
+      rule was not an enhancement: the one-shot version of it shipped, and
+      a first install whose first `device/list` came back empty -- a
+      SUCCESSFUL poll, so no error and nothing in the log -- produced the
+      account entities and not one per-bowl entity until the user reloaded
+      the entry by hand.
   discovery:
     status: exempt
     comment: |

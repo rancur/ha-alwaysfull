@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from homeassistant.const import EntityCategory
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -33,10 +34,11 @@ from .exceptions import AlwaysFullError
 from .models import device_label
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterable
 
     from homeassistant.config_entries import ConfigEntry
-    from homeassistant.helpers.entity import EntityDescription
+    from homeassistant.helpers.entity import Entity, EntityDescription
+    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
     from .api import AlwaysFullClient
     from .coordinator import BowlData
@@ -167,6 +169,61 @@ def account_key(entry: ConfigEntry) -> str:
     """
     account = entry.unique_id or entry.entry_id
     return hashlib.sha256(account.encode()).hexdigest()[:12]
+
+
+@callback
+def async_add_bowl_entities(
+    coordinator: AlwaysFullCoordinator,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    build: Callable[[str], Iterable[Entity]],
+) -> None:
+    """Add `build(device_id)` for every bowl, now AND as bowls appear later.
+
+    Every per-bowl platform goes through this instead of enumerating
+    `coordinator.data` once at forward time, and the reason is a fault
+    found on a real install: after the config flow finished, Home Assistant
+    had the account-level entities and NOT ONE of the per-bowl ones. The
+    entry said `loaded`, nothing was logged, and reloading it by hand
+    created all of them.
+
+    The mechanism is that an empty device list is a SUCCESSFUL poll.
+    `_async_fetch_all` returns `{}`, `last_update_success` stays true, and
+    `async_config_entry_first_refresh` -- which IS awaited before the
+    platforms are forwarded -- raises nothing, because "this account has no
+    bowls" is a legitimate answer that the integration cannot tell apart
+    from "the vendor did not list them this time". A one-shot enumeration
+    turns that single call into a permanent verdict: the platforms set up
+    with an empty device list and never look again, for as long as the
+    entry stays loaded.
+
+    Ordering alone therefore cannot fix this, and moving the first refresh
+    would not have: whatever leaves that first list empty -- a token minted
+    seconds earlier, a vendor-side cache, a bowl registered a minute after
+    the account -- the next poll is the thing that knows better, so the
+    next poll is what has to be able to add the entities.
+
+    It also buys the case nobody had covered either way: a SECOND bowl
+    added to the account months later now appears on the following poll
+    instead of waiting for a restart.
+
+    `added` is keyed on the vendor device id and never emptied. A bowl that
+    drops out of one poll and comes back must not be added twice -- its
+    entities were never removed, they went unavailable (see
+    `AlwaysFullEntity.available`), and re-adding them would collide on
+    their entity ids.
+    """
+    added: set[str] = set()
+
+    @callback
+    def _add_new_bowls() -> None:
+        new = [device_id for device_id in coordinator.data or {} if device_id not in added]
+        if not new:
+            return
+        added.update(new)
+        async_add_entities(entity for device_id in new for entity in build(device_id))
+
+    coordinator.config_entry.async_on_unload(coordinator.async_add_listener(_add_new_bowls))
+    _add_new_bowls()
 
 
 class AlwaysFullEntity(CoordinatorEntity[AlwaysFullCoordinator]):

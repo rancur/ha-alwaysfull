@@ -47,6 +47,7 @@ from .entity import (
     AlwaysFullAccountEntity,
     AlwaysFullWriteEntity,
     ConfigGroup,
+    async_add_bowl_entities,
 )
 
 if TYPE_CHECKING:
@@ -212,20 +213,22 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up per-bowl switches for every bowl, plus one set of account switches."""
+    """Set up per-bowl switches for every bowl, plus one set of account switches.
+
+    The account switches are added once, here: they belong to the account
+    rather than to any bowl, so they must not wait on a device list and
+    must not be re-added when one arrives.
+    """
     coordinator = entry.runtime_data
     async_add_entities(
-        [
-            *(
-                AlwaysFullSwitch(coordinator, device_id, description)
-                for device_id in coordinator.data
-                for description in SWITCHES
-            ),
-            *(
-                AlwaysFullNotifySwitch(coordinator, description)
-                for description in NOTIFY_SWITCHES
-            ),
-        ]
+        AlwaysFullNotifySwitch(coordinator, description) for description in NOTIFY_SWITCHES
+    )
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullSwitch(coordinator, device_id, description) for description in SWITCHES
+        ),
     )
 
 

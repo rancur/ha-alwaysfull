@@ -48,7 +48,7 @@ from homeassistant.components.event import EventEntity, EventEntityDescription
 from homeassistant.core import callback
 
 from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, LOGGER, UNKNOWN
-from .entity import AlwaysFullEntity
+from .entity import AlwaysFullEntity, async_add_bowl_entities
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -128,12 +128,14 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one alert event entity per bowl found by the first poll."""
+    """Set up one alert event entity per bowl on the account, now or on a later poll."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        AlwaysFullAlertEvent(coordinator, device_id, description)
-        for device_id in coordinator.data
-        for description in ALERT_EVENTS
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullAlertEvent(coordinator, device_id, description) for description in ALERT_EVENTS
+        ),
     )
 
 

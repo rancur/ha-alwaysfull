@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 
-from .entity import AlwaysFullWriteEntity
+from .entity import AlwaysFullWriteEntity, async_add_bowl_entities
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -40,12 +40,14 @@ async def async_setup_entry(
     entry: AlwaysFullConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one filter-reset button per bowl found by the first poll."""
+    """Set up one filter-reset button per bowl on the account, now or on a later poll."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        AlwaysFullResetFilterButton(coordinator, device_id, description)
-        for device_id in coordinator.data
-        for description in BUTTONS
+    async_add_bowl_entities(
+        coordinator,
+        async_add_entities,
+        lambda device_id: (
+            AlwaysFullResetFilterButton(coordinator, device_id, description) for description in BUTTONS
+        ),
     )
 
 
