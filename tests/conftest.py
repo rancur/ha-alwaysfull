@@ -167,6 +167,7 @@ class FakeAlwaysFullClient:
         self.device_list_error_remaining: int | None = None
         self.login_error: Exception | None = None
         self.write_error: Exception | None = None
+        self.write_error_remaining: int | None = None
 
         # Set by `save_notify_config`, so a saved object is what the next
         # read returns -- which is what makes a read-modify-write chain
@@ -202,6 +203,18 @@ class FakeAlwaysFullClient:
         """Make `device_list()` raise `error`, for `times` calls (None = forever)."""
         self.device_list_error = error
         self.device_list_error_remaining = times
+
+    def fail_writes(self, error: Exception, times: int | None = None) -> None:
+        """Make every writer raise `error`, for `times` calls (None = forever).
+
+        The bounded form is what makes a RECOVERING write observable: a
+        failure that never stops looks identical to no recovery at all,
+        because both end in an error. Failing exactly the first attempt is
+        the vendor's real single-session behaviour -- the token was
+        invalidated elsewhere, and the one minted by the re-login works.
+        """
+        self.write_error = error
+        self.write_error_remaining = times
 
     async def login(self, email: str, password: str) -> str:
         """Record the login attempt and return a fresh token."""
@@ -312,7 +325,9 @@ class FakeAlwaysFullClient:
                 await self.write_gate.wait()
         finally:
             self.writes_in_flight -= 1
-        if self.write_error is not None:
+        if self.write_error is not None and self.write_error_remaining != 0:
+            if self.write_error_remaining is not None:
+                self.write_error_remaining -= 1
             raise self.write_error
 
     async def save_notify_config(self, config: dict[str, Any]) -> Any:

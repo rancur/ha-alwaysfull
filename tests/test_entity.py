@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityDescription
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -21,11 +21,16 @@ from custom_components.alwaysfull.entity import (
     MAINTENANCE_GROUP,
     SLEEP_GROUP,
     WATER_GROUP,
+    AlwaysFullAccountEntity,
     AlwaysFullEntity,
     AlwaysFullWriteEntity,
     ConfigGroup,
 )
-from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
+from custom_components.alwaysfull.exceptions import (
+    AlwaysFullAuthError,
+    AlwaysFullCredentialsError,
+    AlwaysFullRateLimitError,
+)
 from custom_components.alwaysfull.switch import NOTIFY_SWITCHES
 
 from .conftest import (
@@ -332,3 +337,148 @@ async def test_no_entity_id_carries_the_account_address(
     for entity in registered:
         for part in ("@", ACCOUNT_EMAIL, local_part, domain, domain.replace(".", "_")):
             assert part not in entity.entity_id, entity.entity_id
+
+
+# -- Single-session recovery on the WRITE path -----------------------------
+#
+# The vendor allows ONE active session per account: logging in again
+# invalidates the previous token immediately (verified against the live
+# server -- token A answers 200, a second login mints token B, and token A
+# then answers 651 "token expiration" while token B answers 200). So a
+# rejected token mid-session is not a rare days-later expiry; it is what
+# happens every time the owner opens the phone app while Home Assistant is
+# running, which is an ordinary thing to do with your own bowl.
+#
+# The poll path has always handled it: one silent re-login, then reauth
+# only if that fails too. The write path did not, so polls self-healed and
+# writes reported "Always Full could not apply the change: token
+# expiration" with nothing the user could do about it. These tests pin the
+# two paths to the same behaviour.
+
+
+def _reauth_flows(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Return the reauth flows this integration currently has in progress."""
+    return [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"].get("source") == SOURCE_REAUTH
+    ]
+
+
+async def test_write_recovers_from_an_expired_token_with_one_re_login(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A token invalidated elsewhere costs one silent re-login, not an error.
+
+    `times=1` is the live shape: the first attempt carries the token the
+    phone app just invalidated, the re-login mints a new one, and the
+    retry goes through. The user sees their setting change.
+    """
+    entity = await _write_entity(hass)
+    mock_api.fail_writes(AlwaysFullAuthError("token expiration"), times=1)
+
+    await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    # Exactly one login, asserted as a COUNT: "it succeeded" is also true
+    # of an unbounded retry loop that happened to stop after two.
+    assert mock_api.login_calls == [ACCOUNT_EMAIL]
+    assert mock_api.token == "FRESH-TOKEN"
+    # Attempted, refused, retried -- and the retry really was a write.
+    assert [method for method, _payload in mock_api.writes] == [
+        "set_flush_config",
+        "set_flush_config",
+    ]
+    assert _reauth_flows(hass) == []
+
+
+async def test_write_that_fails_auth_twice_surfaces_a_readable_error(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """One re-login and no more, even when the retry is refused as well.
+
+    An unbounded retry against a single-session vendor is how two Home
+    Assistant instances -- or Home Assistant and the phone app -- log each
+    other out in a loop, so the login count is the assertion that matters
+    here, not the error.
+    """
+    entity = await _write_entity(hass)
+    mock_api.fail_writes(AlwaysFullAuthError("token expiration"))
+
+    with pytest.raises(HomeAssistantError) as err:
+        await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    assert "could not apply the change" in str(err.value)
+    assert len(mock_api.login_calls) == 1
+    assert len(mock_api.writes) == 2
+
+
+async def test_write_rejected_credentials_never_retries_and_reauths(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A wrong stored password goes straight to reauth, with NO login attempt.
+
+    Re-sending a pair the server has just rejected cannot succeed, so the
+    retry would only spend a vendor request to fail the same way. Routing
+    to Home Assistant's reauth prompt is what gives the user somewhere to
+    go; a bare error would be a dead end.
+
+    `login_calls == []` is the assertion that kills a swapped except
+    ordering: with the base class catching first, this error would take
+    the re-login branch, and the reauth would still happen on the retry.
+    """
+    entity = await _write_entity(hass)
+    mock_api.fail_writes(AlwaysFullCredentialsError("Invalid email address or password."))
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    assert mock_api.login_calls == []
+    assert len(mock_api.writes) == 1
+
+    await hass.async_block_till_done()
+    assert len(_reauth_flows(hass)) == 1
+
+
+async def test_write_rate_limit_is_never_an_auth_failure(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """429 means slow down. Re-logging in makes it worse; reauth traps the user.
+
+    The credentials are fine, so a reauth prompt would succeed and the next
+    write would be rate-limited again, with no way out of the loop.
+    """
+    entity = await _write_entity(hass)
+    mock_api.fail_writes(AlwaysFullRateLimitError("Server responded 429 Too Many Requests"))
+
+    with pytest.raises(HomeAssistantError) as err:
+        await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    assert not isinstance(err.value, ConfigEntryAuthFailed)
+    assert "could not apply the change" in str(err.value)
+    assert mock_api.login_calls == []
+    assert len(mock_api.writes) == 1
+
+    await hass.async_block_till_done()
+    assert _reauth_flows(hass) == []
+
+
+async def test_the_account_write_path_recovers_the_same_way(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """`notify/saveConfig` is a write too, and takes the same recovery.
+
+    It is a separate method on a separate base -- the account settings are
+    not per-bowl -- so a fix applied only to `AlwaysFullWriteEntity` would
+    leave the notification switches failing on exactly the same token.
+    """
+    entry = await _load(hass)
+    entity = AlwaysFullAccountEntity(entry.runtime_data, DESCRIPTION)
+    mock_api.fail_writes(AlwaysFullAuthError("token expiration"), times=1)
+
+    await entity.async_save_notify_config(lambda _config: None)
+
+    assert mock_api.login_calls == [ACCOUNT_EMAIL]
+    assert [method for method, _payload in mock_api.writes] == [
+        "save_notify_config",
+        "save_notify_config",
+    ]

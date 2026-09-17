@@ -24,13 +24,13 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER
-from .coordinator import AlwaysFullCoordinator
-from .exceptions import AlwaysFullError
+from .const import DOMAIN, LOGGER, MANUFACTURER
+from .coordinator import CREDENTIALS_REJECTED_MESSAGE, AlwaysFullCoordinator
+from .exceptions import AlwaysFullAuthError, AlwaysFullCredentialsError, AlwaysFullError
 from .models import device_label
 
 if TYPE_CHECKING:
@@ -107,6 +107,85 @@ LOG_GROUP = ConfigGroup(
     build=lambda config, device_id, _bowl: config.to_log_payload(device_id),
     send=lambda client, payload: client.set_log_config(**payload),
 )
+
+
+async def async_send_write(
+    coordinator: AlwaysFullCoordinator,
+    action: Callable[[], Awaitable[Any]],
+) -> None:
+    """Run one vendor write, recovering ONCE from a token rejected mid-session.
+
+    The write path gets exactly the recovery the poll path has had all
+    along, and for the same reason: the vendor is SINGLE-SESSION. Logging
+    in a second time invalidates the first token immediately (verified
+    against the live server: token A answers 200, a second login mints
+    token B, token A then answers 651 "token expiration", token B answers
+    200). So the owner opening the Always Full phone app signs Home
+    Assistant out -- an entirely ordinary thing to do with your own bowl.
+
+    Without this, the asymmetry was the bug. A poll healed itself silently
+    while a write raised "Always Full could not apply the change: token
+    expiration" at the person who had just moved a slider, with nothing
+    they could do but wait for a poll to fix the session behind their back.
+
+    ONE re-login and ONE retry, never a loop. Against a single-session
+    vendor an unbounded retry is how two Home Assistant instances -- or
+    Home Assistant and the phone app -- log each other out for ever, each
+    re-login invalidating the token the other just minted.
+
+    The three except clauses are a decision table, and the ORDER of the
+    inner two is load-bearing in exactly the way the coordinator's is:
+
+    | Failure during a write            | Outcome                        |
+    | --------------------------------- | ------------------------------ |
+    | token rejected, re-login works    | the retry succeeds, silently   |
+    | token rejected, re-login/retry no | readable `HomeAssistantError`  |
+    | credentials rejected (652/602)    | reauth, with NO login attempt  |
+    | rate limit (429)                  | readable error, NO login       |
+
+    `AlwaysFullCredentialsError` is a SUBCLASS of `AlwaysFullAuthError`, so
+    it must be re-raised before the base clause or the re-login branch
+    swallows it -- and re-sending a pair the server has just rejected
+    cannot succeed, it only spends a request. It goes to Home Assistant's
+    reauth prompt instead, which is where a human can actually fix it and
+    is what the coordinator does for the same case.
+
+    A rate limit is NOT an auth failure: it is an `AlwaysFullError` and
+    nothing else, so it falls to the last clause untouched. Mapping it to
+    reauth would trap the user in a prompt that succeeds and changes
+    nothing, and re-logging in would spend another request on an account
+    that has just been told to slow down.
+
+    Nothing here logs or raises a token value, a password or a `sign`
+    header. The vendor's own message ("token expiration") is a description,
+    not a secret.
+    """
+    try:
+        try:
+            await action()
+        except AlwaysFullCredentialsError:
+            # ORDER IS LOAD-BEARING -- see the docstring. Re-raised to the
+            # outer handler so there is one place that maps this to reauth.
+            raise
+        except AlwaysFullAuthError:
+            LOGGER.debug("A write was rejected for its token; attempting one silent re-login")
+            await coordinator.async_relogin()
+            await action()
+    except AlwaysFullCredentialsError as err:
+        # Also the landing place for a re-login answered "invalid email
+        # address or password": raised from inside the handler above, so it
+        # cannot be caught by that handler's siblings.
+        #
+        # `ConfigEntryAuthFailed` is what the coordinator raises, but only
+        # the coordinator's own machinery turns that into a reauth flow --
+        # nothing does so for an exception out of a service call, so the
+        # flow is started explicitly. `_if_available` because starting a
+        # flow the integration does not implement would be a no-op error.
+        coordinator.config_entry.async_start_reauth_if_available(coordinator.hass)
+        raise ConfigEntryAuthFailed(CREDENTIALS_REJECTED_MESSAGE) from err
+    except WRITE_FAILURES as err:
+        msg = f"Always Full could not apply the change: {err}"
+        raise HomeAssistantError(msg) from err
 
 
 def _reject_partial_group(payload: dict[str, Any]) -> None:
@@ -346,15 +425,18 @@ class AlwaysFullWriteEntity(AlwaysFullEntity):
         letting the next write start while this one's read-back is still in
         flight is exactly the overlap the lock exists to prevent.
 
-        `action` is called INSIDE the try so that a payload built lazily by
-        the caller is covered by the same error mapping.
+        `action` is called by `async_send_write`, which maps the failures
+        and does the one-shot re-login recovery -- so a payload built
+        lazily by the caller is covered by the same error mapping.
+
+        The re-login and the retry happen while the lock is still HELD, and
+        that is deliberate: dropping it to re-authenticate would let the
+        next queued write start against the very token that was just
+        rejected, and the two would then race to replace each other's
+        session on a vendor that allows only one.
         """
         async with self.coordinator.write_lock:
-            try:
-                await action()
-            except WRITE_FAILURES as err:
-                msg = f"Always Full could not apply the change: {err}"
-                raise HomeAssistantError(msg) from err
+            await async_send_write(self.coordinator, action)
             await self.coordinator.async_refresh_after_write(self._device_id)
 
     def _require_bowl(self) -> BowlData:
@@ -432,12 +514,18 @@ class AlwaysFullAccountEntity(CoordinatorEntity[AlwaysFullCoordinator]):
 
         # The same account-wide lock the per-bowl writes take: these are
         # requests against the same rate-limited account.
+        #
+        # Through `async_send_write` like every per-bowl write, so the
+        # account settings get the same one-shot re-login: the token the
+        # phone app invalidated is the same token for both, and a fix that
+        # reached only `AlwaysFullWriteEntity` would leave the notification
+        # switches failing on exactly the error the bowl entities recover
+        # from.
         async with self.coordinator.write_lock:
-            try:
-                await self.coordinator.client.save_notify_config(updated)
-            except WRITE_FAILURES as err:
-                msg = f"Always Full could not apply the change: {err}"
-                raise HomeAssistantError(msg) from err
+            await async_send_write(
+                self.coordinator,
+                lambda: self.coordinator.client.save_notify_config(updated),
+            )
             await self.coordinator.async_refresh_notify_config()
 
 

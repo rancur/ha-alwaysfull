@@ -389,6 +389,27 @@ account returned no bowls. It usually clears itself — as soon as a poll lists
 the bowl, its entities appear on their own, with no reload. If the bowl is
 visible in the Always Full app and this persists, open an issue.
 
+**Using the phone app signs Home Assistant out (and that is fine).** The
+vendor allows **one active session per account**. Signing in anywhere else —
+opening the Always Full app on your phone is the everyday case — invalidates
+the token Home Assistant is using, and the next request it makes comes back
+`token expiration`. This is normal, it is not a sign anything is broken, and
+you do not have to stop using the app.
+
+The integration recovers on its own. A poll or a setting change that meets a
+rejected token signs in again, once, and carries on; a change you made goes
+through on that second attempt, so you should see nothing at all. The reverse
+is true too: Home Assistant signing back in is what logs the *app* out, so an
+app that asks you to sign in again after a while is the same behaviour seen
+from the other side.
+
+What is *not* normal is this failing repeatedly. The integration will not
+re-authenticate more than once per operation — against a one-session-per-
+account server, retrying in a loop is how two clients sign each other out for
+ever — so a failure that persists means the sign-in itself was refused, i.e.
+the account's password has changed. Home Assistant then asks you to
+re-authenticate, which is the case below.
+
 **It keeps asking me to re-authenticate.** The vendor returns the same error
 for a wrong password and for an address with no account, so those two cases
 cannot be told apart. Sign in to the Always Full app with the same credentials

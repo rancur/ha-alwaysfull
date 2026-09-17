@@ -10,6 +10,16 @@ Polling shape, per cycle:
   It is account-level, not per-device, and changes only when the user edits
   it.
 
+A rejected token is a ROUTINE event here, not a once-in-days expiry. The
+vendor allows one active session per account: logging in a second time
+invalidates the first token immediately (verified against the live server
+-- token A answers 200, a second login mints token B, and token A then
+answers 651 "token expiration" while token B answers 200). So every time
+the owner opens the Always Full phone app while Home Assistant is running,
+the next request Home Assistant makes is rejected. That is why the silent
+re-login below exists, and why `async_relogin` is shared with the write
+path rather than private to this poll.
+
 Error mapping is deliberately asymmetric and must stay that way:
 
 | Failure                          | Raised                  |
@@ -200,7 +210,7 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 # the user re-enter a password that is still correct would
                 # be noise, not security.
                 LOGGER.debug("Token rejected, attempting one silent re-login")
-                await self._async_relogin()
+                await self.async_relogin()
                 return await self._async_fetch_all()
         except AlwaysFullAuthError as err:
             # Second failure: the stored credentials really are wrong.
@@ -213,8 +223,14 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
             msg = f"Error talking to Always Full: {err}"
             raise UpdateFailed(msg) from err
 
-    async def _async_relogin(self) -> None:
+    async def async_relogin(self) -> None:
         """Re-login with the stored credentials, refreshing the client token.
+
+        Public because the WRITE path needs the same recovery and there
+        must be exactly one thing that knows how to re-login: the poll path
+        calls it above, `entity.async_send_write` calls it for a write
+        whose token was rejected. Two copies would drift, and the one that
+        drifted would be the one nobody was watching.
 
         The new token is kept in memory only. Writing it back to the config
         entry here would fire the entry's update listeners mid-poll, which
