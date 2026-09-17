@@ -13,7 +13,7 @@ from homeassistant.helpers.entity import EntityDescription
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.alwaysfull import PLATFORMS
-from custom_components.alwaysfull.const import DOMAIN
+from custom_components.alwaysfull.const import DOMAIN, RELOGIN_MAX_ATTEMPTS
 from custom_components.alwaysfull.entity import (
     FILTER_GROUP,
     FLUSH_GROUP,
@@ -482,6 +482,41 @@ async def test_write_rate_limit_is_never_an_auth_failure(
     assert not isinstance(err.value, ConfigEntryAuthFailed)
     assert "could not apply the change" in str(err.value)
     assert mock_api.login_calls == []
+    assert len(mock_api.writes) == 1
+
+    await hass.async_block_till_done()
+    assert _reauth_flows(hass) == []
+
+
+async def test_a_write_shares_the_polls_relogin_budget(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The budget is per ACCOUNT, so a write cannot spend past what polls used.
+
+    The vendor counts requests per account, and this integration has one
+    account and two request paths. A budget the write path did not respect
+    would be no budget at all: the login storm would simply come out of
+    the other door.
+
+    Past the budget the write gives the user a readable error -- NOT a
+    reauth prompt, because nothing here says the credentials are wrong,
+    and not a wait either.
+    """
+    entity = await _write_entity(hass)
+    for _ in range(RELOGIN_MAX_ATTEMPTS):
+        await entity.coordinator.async_relogin()
+    assert len(mock_api.login_calls) == RELOGIN_MAX_ATTEMPTS
+
+    mock_api.fail_writes(AlwaysFullAuthError("token expiration"), times=1)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    assert not isinstance(err.value, ConfigEntryAuthFailed)
+    assert "could not apply the change" in str(err.value)
+    assert len(mock_api.login_calls) == RELOGIN_MAX_ATTEMPTS
+    # Attempted once and not retried: the retry is what the re-login was
+    # for, and the re-login did not happen.
     assert len(mock_api.writes) == 1
 
     await hass.async_block_till_done()

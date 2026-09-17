@@ -22,6 +22,8 @@ from custom_components.alwaysfull.const import (
     DOMAIN,
     EMPTY_DEVICE_LIST_EVERY_N_POLLS,
     NOTIFY_CONFIG_EVERY_N_POLLS,
+    RELOGIN_MAX_ATTEMPTS,
+    RELOGIN_WINDOW_SECONDS,
 )
 from custom_components.alwaysfull.coordinator import (
     AlwaysFullCoordinator,
@@ -356,6 +358,66 @@ async def test_a_652_from_the_login_itself_still_reaches_reauth(
     assert coordinator.last_update_success is False
     assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
     assert mock_api.login_calls == ["user@example.com"]
+
+
+async def _relogin_until_exhausted(
+    coordinator: AlwaysFullCoordinator, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Spend the whole re-login budget through ordinary polls.
+
+    One eviction per poll, each healed by one re-login, which is exactly
+    what a second client on the account produces -- not a synthetic loop.
+    """
+    for _ in range(RELOGIN_MAX_ATTEMPTS):
+        mock_api.fail_device_list(await vendor_error("651"), times=1)
+        await coordinator.async_refresh()
+        assert coordinator.last_update_success is True
+
+
+async def test_relogins_are_bounded_and_the_integration_degrades_instead(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """A second client on the account must not turn into a login storm.
+
+    The vendor allows one session per account, so two clients evict each
+    other; with a re-login on every failure that becomes both of them
+    hammering the login endpoint, which is what trips the vendor's 603
+    rate limit. Past the budget the poll simply fails: stale, and NOT
+    reauthenticated -- the credentials are fine and a reauth prompt would
+    be a dead end.
+    """
+    coordinator = await _setup(hass)
+    await _relogin_until_exhausted(coordinator, mock_api)
+    assert len(mock_api.login_calls) == RELOGIN_MAX_ATTEMPTS
+
+    mock_api.fail_device_list(await vendor_error("651"), times=1)
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert not isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+    assert len(mock_api.login_calls) == RELOGIN_MAX_ATTEMPTS
+
+
+async def test_the_relogin_budget_refills_so_the_integration_recovers(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """The bound is a cooldown, never a permanent lockout.
+
+    "Stale but recovering" is the whole point: an integration that stopped
+    re-logging in for good would need a Home Assistant restart to come
+    back, which is the failure this change exists to prevent, not a
+    cheaper version of it.
+    """
+    coordinator = await _setup(hass)
+    await _relogin_until_exhausted(coordinator, mock_api)
+
+    freezer.tick(RELOGIN_WINDOW_SECONDS + 1)
+    mock_api.fail_device_list(await vendor_error("651"), times=1)
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is True
+    assert len(mock_api.login_calls) == RELOGIN_MAX_ATTEMPTS + 1
 
 
 async def test_the_vendors_own_rate_limit_code_never_reaches_reauth(

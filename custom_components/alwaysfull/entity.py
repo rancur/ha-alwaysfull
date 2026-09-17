@@ -136,12 +136,18 @@ async def async_send_write(
     The three except clauses are a decision table, and the ORDER of the
     inner two is load-bearing in exactly the way the coordinator's is:
 
-    | Failure during a write            | Outcome                        |
-    | --------------------------------- | ------------------------------ |
-    | token rejected, re-login works    | the retry succeeds, silently   |
-    | token rejected, re-login/retry no | readable `HomeAssistantError`  |
-    | credentials rejected (652/602)    | reauth, with NO login attempt  |
-    | rate limit (429)                  | readable error, NO login       |
+    | Failure during a write             | Outcome                        |
+    | ---------------------------------- | ------------------------------ |
+    | session rejected, re-login works   | the retry succeeds, silently   |
+    | session rejected, re-login/retry no| readable `HomeAssistantError`  |
+    | LOGIN answered 652/602             | reauth, with NO login attempt  |
+    | rate limit (603, or HTTP 429)      | readable error, NO login       |
+    | re-login budget spent              | readable error, NO login       |
+
+    A write shares the poll path's re-login budget, because the vendor
+    counts requests per ACCOUNT and there is one account here. Past that
+    budget the write fails with a readable message rather than reauth or a
+    wait -- see `AlwaysFullCoordinator._spend_relogin_budget`.
 
     `AlwaysFullCredentialsError` is a SUBCLASS of `AlwaysFullAuthError`, so
     it must be re-raised before the base clause or the re-login branch

@@ -25,3 +25,17 @@ class AlwaysFullCredentialsError(AlwaysFullAuthError):
 
 class AlwaysFullRateLimitError(AlwaysFullError):
     """Server asked us to slow down."""
+
+
+class AlwaysFullReloginThrottledError(AlwaysFullError):
+    """WE asked ourselves to slow down: the re-login budget is spent.
+
+    Deliberately NOT an `AlwaysFullAuthError`, and the distinction is the
+    whole point of the class existing. A throttled re-login is not an
+    authentication failure -- the stored credentials are fine and have not
+    been tested -- so it must not reach `ConfigEntryAuthFailed`, which
+    would put the user in front of a reauth prompt that succeeds and
+    changes nothing. As a plain `AlwaysFullError` it degrades the poll to
+    `UpdateFailed` and a write to a readable `HomeAssistantError`, both of
+    which recover on their own once the window slides.
+    """

@@ -74,6 +74,49 @@ CREDENTIAL_REJECTION_CODES = frozenset(
 # and it is the only reading that cannot trap a user in a reauth loop.
 CODE_RATE_LIMITED = "603"
 
+# How many re-logins this integration will attempt for one account in any
+# `RELOGIN_WINDOW_SECONDS`, across BOTH the poll path and the write path.
+#
+# The vendor allows one session per account, so a second client -- the
+# owner's phone app, or a second Home Assistant -- evicts this one every
+# time it talks to the server. With a re-login on every rejected session,
+# two clients sharing an account do not settle: each re-login invalidates
+# the other's token, that client re-logins, and both sides spend requests
+# as fast as the network allows. That is a login storm, and a login storm
+# is exactly what the vendor answers with `603` (see `CODE_RATE_LIMITED`):
+# the measured trigger was roughly EIGHT logins in a few seconds.
+#
+# The bound is three attempts per five minutes, and both numbers are
+# chosen rather than round:
+#
+# - Three, not one, because a burst is the ORDINARY case. Somebody opening
+#   their phone app, looking at two screens and closing it evicts us
+#   several times in a row, and every one of those is a session this
+#   integration should heal silently. A single-attempt bound would make a
+#   normal minute of app use look like a fault.
+# - Three per five minutes is at most 36 logins an hour in the very worst
+#   case, against an observed limit of about eight in a few SECONDS. Two
+#   orders of magnitude of headroom, on a limit whose real threshold is
+#   not documented and which we must not probe (see `docs/VENDOR-API.md`,
+#   "Known unknowns").
+# - Five minutes, because the recovery it gates has to be quicker than a
+#   person noticing and restarting Home Assistant, and slower than the
+#   30-second floor on the poll interval -- a bound shorter than the poll
+#   interval would not bound anything.
+#
+# A healthy installation never reaches this. One re-login heals a session
+# and the next poll succeeds; the budget only bites when re-logins keep
+# being needed, which is precisely the contention case.
+#
+# What happens past the bound is `AlwaysFullReloginThrottledError`, which
+# is NOT an auth error: the poll degrades to `UpdateFailed` (stale, and
+# retried on the next cycle) rather than pushing the user into a reauth
+# prompt that would succeed and fix nothing. The window is a sliding one,
+# so the budget refills on its own -- there is no state a restart clears
+# that time would not.
+RELOGIN_MAX_ATTEMPTS = 3
+RELOGIN_WINDOW_SECONDS = 300
+
 # The one endpoint that authenticates with the stored email/password pair
 # rather than with a token. Which endpoint answered a credential-rejection
 # code decides what that code MEANS -- see `api.AlwaysFullClient._handle_response`.

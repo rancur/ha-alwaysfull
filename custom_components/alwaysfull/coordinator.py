@@ -22,30 +22,36 @@ path rather than private to this poll.
 
 Error mapping is deliberately asymmetric and must stay that way:
 
-| Failure                          | Raised                  |
-| -------------------------------- | ----------------------- |
-| token rejected, re-login works   | (nothing -- silent)     |
-| token rejected, re-login fails   | `ConfigEntryAuthFailed` |
-| credentials rejected (652/602)   | `ConfigEntryAuthFailed` |
-| HTTP 429                         | `UpdateFailed`          |
-| timeout / client error / bad JSON| `UpdateFailed`          |
+| Failure                            | Raised                  |
+| ---------------------------------- | ----------------------- |
+| session rejected, re-login works   | (nothing -- silent)     |
+| session rejected, re-login fails   | `ConfigEntryAuthFailed` |
+| re-login budget spent              | `UpdateFailed`          |
+| LOGIN answered 652/602             | `ConfigEntryAuthFailed` |
+| rate limit (603, or HTTP 429)      | `UpdateFailed`          |
+| timeout / client error / bad JSON  | `UpdateFailed`          |
 
-Credentials rejected is NOT the same row as a rejected token, and is not a
-retry: the server has said the stored email/password pair is wrong, so
-re-sending that same pair cannot succeed. Retrying it would buy nothing and
-cost the vendor one extra request per poll for as long as the entry stays
-broken. It goes straight to reauth.
+"Session rejected" is `651` from anywhere, and `652`/`602` from a
+TOKEN-BEARING endpoint. The same 652 from the LOGIN endpoint is a
+different row entirely, and is not a retry: the server has said the stored
+email/password pair is wrong, so re-sending that same pair cannot succeed.
+It goes straight to reauth. Which endpoint answered is `api.py`'s to
+decide; this module only ever sees the class.
 
 A rate limit must NEVER become `ConfigEntryAuthFailed`: the credentials are
 fine, so the reauth flow the user is pushed into would succeed, the next
 poll would be rate-limited again, and they would be trapped in a reauth
-loop with no way to fix it.
+loop with no way to fix it. The same goes for the re-login budget in
+`_spend_relogin_budget`: being held back from re-authenticating says
+nothing about the credentials, so it degrades the poll and leaves the
+entry loaded.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -64,12 +70,15 @@ from .const import (
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
     NOTIFY_CONFIG_EVERY_N_POLLS,
+    RELOGIN_MAX_ATTEMPTS,
+    RELOGIN_WINDOW_SECONDS,
 )
 from .exceptions import (
     AlwaysFullAuthError,
     AlwaysFullCredentialsError,
     AlwaysFullError,
     AlwaysFullRateLimitError,
+    AlwaysFullReloginThrottledError,
 )
 from .models import BowlConfig, BowlState
 
@@ -184,6 +193,11 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         # experiment that settles this.
         self.write_lock = asyncio.Lock()
         self._poll_count = 0
+        # When each re-login was ATTEMPTED, most recent last, pruned to
+        # the last `RELOGIN_WINDOW_SECONDS`. Attempts, not successes: a
+        # login that the vendor refused still cost the account a request,
+        # which is the thing being budgeted. See `_spend_relogin_budget`.
+        self._relogin_attempts: list[float] = []
         # Consecutive polls that found no bowls at all. Drives
         # `_warn_if_no_devices`; zero means the last poll found some.
         self._empty_polls = 0
@@ -242,7 +256,57 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         if not email or not password:
             msg = "No stored credentials to re-authenticate with"
             raise AlwaysFullAuthError(msg)
+        self._spend_relogin_budget()
         await self.client.login(email, password)
+
+    def _spend_relogin_budget(self) -> None:
+        """Take one re-login from the budget, or refuse the re-login outright.
+
+        THE CHOKEPOINT, and the reason `async_relogin` is the one place
+        that knows how to log in: the poll path and all five write
+        platforms come through here, so the budget is per ACCOUNT -- which
+        is the unit the vendor's own rate limit counts.
+
+        Why a bound exists at all: the vendor allows one session per
+        account, so a second client evicts this one every time it talks to
+        the server, and a re-login on every rejected session turns routine
+        contention into two clients invalidating each other's tokens as
+        fast as the network allows. The vendor answers a burst of logins
+        with `603` -- measured at roughly eight in a few seconds -- and
+        then NEITHER client works. The bound degrades this integration to
+        "stale but recovering" instead, which is the outcome that leaves
+        the user with a working phone app.
+
+        Not a retry loop and not a sleep: nothing here waits. The refusal
+        is immediate, the caller fails this one operation, and the next
+        scheduled poll tries again. See `RELOGIN_MAX_ATTEMPTS` for why the
+        numbers are what they are.
+
+        `time.monotonic`, never the wall clock: an NTP correction or a DST
+        change must not be able to hand back a budget that was spent, or
+        freeze one that was not.
+        """
+        now = time.monotonic()
+        self._relogin_attempts = [
+            at for at in self._relogin_attempts if now - at < RELOGIN_WINDOW_SECONDS
+        ]
+        if len(self._relogin_attempts) >= RELOGIN_MAX_ATTEMPTS:
+            LOGGER.debug(
+                "Not re-authenticating with Always Full: %s attempts already made in the last %s seconds",
+                len(self._relogin_attempts),
+                RELOGIN_WINDOW_SECONDS,
+            )
+            msg = (
+                f"Always Full has been re-authenticated {RELOGIN_MAX_ATTEMPTS} times in the "
+                f"last {RELOGIN_WINDOW_SECONDS} seconds, so this attempt was held back to "
+                "avoid being rate-limited. This usually means something else is signed in to "
+                "the same Always Full account; the next poll will try again."
+            )
+            raise AlwaysFullReloginThrottledError(msg)
+        # Recorded BEFORE the attempt, not after: a login that fails still
+        # spent a request against the account, and a login that hangs must
+        # not leave the budget looking untouched.
+        self._relogin_attempts.append(now)
 
     async def _async_fetch_all(self) -> dict[str, BowlData]:
         """Do the actual reads for one poll cycle."""
