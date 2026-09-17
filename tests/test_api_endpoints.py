@@ -153,12 +153,21 @@ async def test_expired_token_raises_auth_error_but_not_credentials_rejected():
 
 
 @pytest.mark.asyncio
-async def test_unclassified_code_is_not_an_auth_error():
-    """An unknown code must not be guessed into a reauth the user cannot fix."""
+async def test_unclassified_code_is_a_plain_error_and_nothing_more():
+    """An unknown code must not be guessed into a reauth the user cannot fix.
+
+    Asserted as an EXACT type, not as "an `AlwaysFullError` that is not an
+    `AlwaysFullAuthError`". That weaker pair still admits
+    `AlwaysFullRateLimitError`, which the config flow answers with
+    "cannot connect" rather than "unknown error" -- so a mutation
+    classifying every unclassified code as a rate limit would change what
+    the user is told while the test stayed green. Verified by making
+    exactly that mutation: it passes the old assertion and fails this one.
+    """
     client, _ = _client({"code": "500", "msg": "server exploded", "data": None}, token="x")
     with pytest.raises(AlwaysFullError) as err:
         await client.device_list()
-    assert not isinstance(err.value, AlwaysFullAuthError)
+    assert type(err.value) is AlwaysFullError
 
 
 # --- device_list ---------------------------------------------------------
