@@ -206,3 +206,77 @@ async def test_diagnostics_label_each_bowl_stably_without_naming_it(
     labels = [device["id"] for device in first["devices"]]
     assert len(set(labels)) == 2
     assert labels == [device["id"] for device in second["devices"]]
+
+
+# A stand-in for the account-holder record the vendor's `/app/user/loginInfo`
+# endpoint returns. This integration does NOT call that endpoint -- see the
+# note in `api.py` -- and that is exactly why this test exists.
+#
+# A redaction test written only against the payloads we fetch TODAY passes
+# forever while a new endpoint leaks: the day someone adds a call for
+# `subscribe` (the one genuinely useful field on that record), the rest of
+# the object rides along, because `diagnostics.py` passes vendor payloads
+# through verbatim by design. Feeding the shape through before anybody
+# fetches it is what makes the redaction set a property of the file rather
+# than a list of the fields that happened to exist when it was written.
+#
+# Every value here is synthetic. `555-0100` is in the block reserved for
+# fiction, `1 Test Street` is not a place, and the rest are sentinels for
+# the same reason `SENTINEL_PASSWORD` is one: a realistic short value like
+# a two-letter state code occurs by accident in a clean file, so an
+# assertion on it would be either vacuous or flaky.
+LOGIN_INFO_PII = {
+    "firstName": "SENTINEL-FIRST-NAME-DO-NOT-PUBLISH",
+    "lastName": "SENTINEL-LAST-NAME-DO-NOT-PUBLISH",
+    "phone": "+1-555-0100",
+    "countryCode": "SENTINEL-COUNTRY-CODE-DO-NOT-PUBLISH",
+    "address1": "1 Test Street",
+    "address2": "Apt SENTINEL-DO-NOT-PUBLISH",
+    "city": "SENTINEL-CITY-DO-NOT-PUBLISH",
+    "st": "SENTINEL-STATE-DO-NOT-PUBLISH",
+    "zip": "SENTINEL-POSTCODE-DO-NOT-PUBLISH",
+}
+
+# The two fields on that same record that are NOT personal and ARE worth
+# reading in a bug report: whether the account has the vendor's
+# subscription, and when it lapses. Redacting the whole object indis-
+# criminately would throw these away, so they are asserted to survive.
+LOGIN_INFO_KEEP = {"subscribe": 1, "subscribeExpires": "2027-01-01 00:00:00"}
+
+
+async def test_diagnostics_redact_account_holder_fields_we_do_not_yet_fetch(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    mock_api: FakeAlwaysFullClient,
+) -> None:
+    """A loginInfo-shaped payload leaks nothing, at either place it could land.
+
+    Injected in BOTH positions a future contributor could plausibly put it:
+    merged into the vendor's raw device row (nested inside a list) and into
+    the account-level notify config (a top-level object). `async_redact_data`
+    recurses, so one position passing does not prove the other does -- but
+    a field name dropped from `TO_REDACT` fails both.
+    """
+    rows: list[dict[str, Any]] = load_fixture_data("device_list_multi")["data"]
+    for row in rows:
+        row.update(LOGIN_INFO_PII)
+        row.update(LOGIN_INFO_KEEP)
+    mock_api.device_rows_override = rows
+
+    notify_config: dict[str, Any] = load_fixture_data("notify_config")
+    notify_config.update(LOGIN_INFO_PII)
+    notify_config.update(LOGIN_INFO_KEEP)
+    mock_api.saved_notify_config = notify_config
+
+    entry = await _load_entry(hass)
+    diagnostics: Any = await get_diagnostics_for_config_entry(hass, hass_client, entry)
+    text = json.dumps(diagnostics)
+
+    for field, value in LOGIN_INFO_PII.items():
+        assert value not in text, f"{field} survived into the diagnostics download"
+
+    # Not vacuous: the payload really did reach the file, carrying the two
+    # fields that are meant to stay readable.
+    assert diagnostics["notify_config"]["subscribe"] == 1
+    assert diagnostics["notify_config"]["subscribeExpires"] == "2027-01-01 00:00:00"
+    assert diagnostics["devices"][0]["raw"]["subscribe"] == 1

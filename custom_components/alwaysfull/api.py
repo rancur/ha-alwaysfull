@@ -251,6 +251,33 @@ class AlwaysFullClient:
         self.token = token
         return token
 
+    # NOT IMPLEMENTED ON PURPOSE: `/app/user/loginInfo`.
+    #
+    # If you are here to add it, read this first. Against a real account
+    # that endpoint returns, in plain text, the account holder's
+    # `firstName`, `lastName`, `phone`, `countryCode`, `address1`,
+    # `address2`, `city`, `st` and `zip` -- their full name, their phone
+    # number and their home street address, city and postcode. It is the
+    # single most sensitive payload the vendor exposes, and this
+    # integration has no use for any of it.
+    #
+    # The one field on it worth having is `subscribe` (with
+    # `subscribeExpires`): whether the account holds the vendor's
+    # subscription. If you need that, then:
+    #
+    #   - extract ONLY those two fields at the call site and return them;
+    #   - never return, cache, store on the coordinator, log, or put in an
+    #     exception message any other field from the response;
+    #   - never hand the whole object to anything -- in particular not to
+    #     `diagnostics.py`, which passes vendor payloads through verbatim
+    #     by design, into a file the README tells users to attach to a
+    #     public GitHub issue.
+    #
+    # `diagnostics.TO_REDACT` already lists every field above, so the
+    # redaction is in place before the call exists. Do not treat that as
+    # permission to pass the object around: redaction is by key name, and
+    # a field the vendor adds to this record tomorrow is not in that set.
+
     async def device_list(self) -> Any:
         """List every bowl on the account.
 

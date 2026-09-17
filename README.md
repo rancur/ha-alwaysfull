@@ -441,6 +441,12 @@ the name you gave each bowl are replaced with `**REDACTED**`, and so is the text
 of each alert, because the vendor writes your bowl's MAC address into it. Each
 bowl appears as a derived label like `bowl-1a2b3c4d` instead of its id or name.
 
+Your **name, phone number and postal address** are redacted too, even though
+nothing this integration fetches contains them. The vendor's API will hand all
+of that out to anyone holding your session token, from an endpoint this
+integration deliberately does not call; the redaction is in place first, so that
+adding the one useful field on that record cannot quietly publish the rest.
+
 The file **also contains the vendor's raw device record verbatim**, which is
 deliberate — it is what makes a report about an unsupported bowl useful, and it
 carries fields this integration does not model. Redaction works by field name,
@@ -479,8 +485,9 @@ Issues and pull requests are welcome. Two things to know before you open one:
 - **No personal data, ever.** `scripts/check_no_pii.py` runs in CI over the
   working tree, the full git history *and* every commit message, and fails the
   build on an email address outside the documentation domains, an RFC1918
-  address, a home-directory path, a 32-hex token or a bare twelve-hex device
-  id. Use `user@example.com` and the synthetic fixture ids.
+  address, a home-directory path, a 32-hex token, a bare twelve-hex device
+  id, a street address or a US state beside a ZIP code. Use
+  `user@example.com` and the synthetic fixture ids.
 - **Tests come first, and they have to be able to fail.** Every guard in this
   repository has been run against a deliberately broken implementation and
   observed to fail before it was believed.

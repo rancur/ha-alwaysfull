@@ -68,6 +68,34 @@ TO_REDACT = {
     # and the reason a redaction set built only from field NAMES that look
     # like identifiers is not enough.
     "msg",
+    # THE ACCOUNT HOLDER'S NAME, PHONE NUMBER AND POSTAL ADDRESS.
+    #
+    # Nothing this integration fetches produces any of these today. They
+    # are listed anyway, because the endpoint that returns them --
+    # `/app/user/loginInfo`, described in `api.py` -- is one call away from
+    # being added: it carries `subscribe`, which is a genuinely useful
+    # thing to want, and everything above rides along with it in the same
+    # flat object.
+    #
+    # Redaction here is by KEY NAME, so listing a key that never appears
+    # costs exactly nothing. The reverse costs a user their home address,
+    # published to a public issue tracker by a contributor who added one
+    # API call and had no reason to think about this file. Which of those
+    # two mistakes to risk is not a close question.
+    #
+    # `subscribe` and `subscribeExpires` are deliberately NOT here: they
+    # say whether the account has the vendor's subscription and when it
+    # lapses, which is worth reading in a bug report and is nobody's
+    # personal data.
+    "firstName",
+    "lastName",
+    "phone",
+    "countryCode",
+    "address1",
+    "address2",
+    "city",
+    "st",
+    "zip",
 }
 
 
