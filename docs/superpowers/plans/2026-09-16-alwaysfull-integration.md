@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Domain is `alwaysfull`. Repo is `rancur/ha-alwaysfull`, public, MIT.
-- **No personal data anywhere in the repo**, including fixtures, commit messages, README screenshots and issue templates. The real bowl's MAC is `REDACTED-DEVICE-ID` and must never appear; fixtures use `aabbccddeeff`. CI enforces this.
+- **No personal data anywhere in the repo**, including fixtures, commit messages, README screenshots and issue templates. The owner's real device MAC must never appear; fixtures use the synthetic `aabbccddeeff`. CI enforces this, and the banned literal itself lives only in the CI script, which excludes itself from the scan.
 - API base: `https://app.alwaysfull.com/alwaysfull-biz`. Signing secret `e688769fcccc44cd3fd6f7dsfsdvdse` (public in the vendor APK, ships in source).
 - Minimum poll interval **30 s**, default **60 s**. The vendor app polls detail every 3 s, so this is well within tolerance.
 - `import voluptuous as vol` (HA aliases it to `probatio`); add `voluptuous` to dev requirements for mypy.
@@ -346,7 +346,7 @@ async def test_setup_and_unload(hass, mock_api):
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 async def test_auth_failure_starts_reauth(hass, mock_api_auth_fails):
-    entry = MockConfigEntry(domain=DOMAIN, data={"email": "u@e.com", "password": "pw"})
+    entry = MockConfigEntry(domain=DOMAIN, data={"email": "user@example.com", "password": "pw"})
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -495,7 +495,7 @@ The alert-type switches and the text/email switches all write through `save_noti
 
 - [ ] **Step 1: Write `scripts/check_no_pii.py`**
 
-Fails the build on: any email address that is not `user@example.com`; the strings `REDACTED-DEVICE-ID`, `REDACTED-LAN-PREFIX`, `/Users/`, `REDACTED-SURNAME`; anything matching a 32-hex token that is not the known-public signing secret or a test MD5. Run it over the whole tree including `.md` files.
+Fails the build on: any email address that is not `user@example.com`; the owner's real device MAC, RFC1918 address prefixes, local home-directory paths, the owner's surname; anything matching a 32-hex token that is not the known-public signing secret or a test MD5. Run it over the whole tree including `.md` files.
 
 - [ ] **Step 2: Prove the guard actually fails.** Temporarily add a real-looking MAC to a fixture, run the script, confirm non-zero exit, then remove it. A guard only ever seen passing is unverified.
 

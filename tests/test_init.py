@@ -33,7 +33,7 @@ async def test_auth_failure_starts_reauth(
     hass: HomeAssistant, mock_api_auth_fails: FakeAlwaysFullClient
 ) -> None:
     """A rejected token that cannot be refreshed sends the user to reauth."""
-    entry = MockConfigEntry(domain=DOMAIN, data={"email": "u@e.com", "password": "pw"})
+    entry = MockConfigEntry(domain=DOMAIN, data={"email": "user@example.com", "password": "pw"})
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
