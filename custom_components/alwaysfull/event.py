@@ -28,11 +28,16 @@ Two things this platform deliberately does NOT do:
   1 = Ordinary and 2 = Alarm, but live rows carry 0 and 1, so the field
   cannot be trusted. Severity comes from `type`, which the app ignores
   entirely and which is a stable machine-readable code.
-- It does not dedupe with a high-water mark. In the live capture the ids
-  run DOWNWARDS as time runs forwards (id 5000 is the newest row, 5012 the
-  oldest), so "fire only ids above the highest seen" would latch on the
-  oldest row and suppress every future alert forever. Dedupe is a set of
-  seen ids, which is correct whichever way the server assigns them.
+- It does not dedupe with a high-water mark. What the live capture actually
+  shows is the ordinary shape: the page arrives NEWEST FIRST and ids
+  ASCEND over time (id 2960335 at 2026-09-16T23:35:36Z, id 2954773 at
+  2026-09-15T22:08:57Z), so a watermark would work -- by depending on an
+  ordering the vendor has never documented and that we have seen exactly
+  once, from one account, over thirteen rows. A watermark that is wrong
+  once does not degrade: it seeds itself above every future alert and
+  silently suppresses all of them, for ever. A set of seen ids costs a
+  bounded dict and cannot fail that way, whichever way ids are assigned.
+  `test_a_newer_alert_with_a_lower_id_still_fires` is what keeps it a set.
 """
 
 from __future__ import annotations
@@ -85,8 +90,10 @@ ALERT_EVENTS: tuple[EventEntityDescription, ...] = (
 def _chronological(row: dict[str, Any]) -> tuple[str, str]:
     """Return a sort key that puts the OLDEST alert first.
 
-    Ordered by `createTime`, not by id: the ids are server-assigned and the
-    live capture proves they do not run in time order. `createTime` is a
+    Ordered by `createTime`, not by id. The ids are server-assigned, and
+    while they were observed ascending over time, that is an undocumented
+    property of one capture; `createTime` is the field that actually MEANS
+    when the alert happened, and it costs nothing to use. `createTime` is a
     fixed-width UTC `%Y-%m-%dT%H:%M:%SZ` string, so lexicographic order IS
     chronological order and no parsing (which could raise mid-update) is
     needed. The id only breaks ties, and only to keep the order stable.
@@ -216,5 +223,15 @@ class AlwaysFullAlertEvent(AlwaysFullEntity, EventEntity):
                 ATTR_RAW_TYPE: raw_type,
             },
         )
-        # NOT optional: `_trigger_event` only records the event internally.
+        # NOT optional, and NOT redundant with the write `CoordinatorEntity`
+        # does at the end of the update: that one publishes only the LAST
+        # event of a poll. Without this line, a poll carrying several new
+        # alerts records each one and then overwrites it, so every event but
+        # the last never reaches the state machine -- the `hardware_fault`
+        # a user automated on is swallowed because a chattier alert landed
+        # in the same sixty seconds.
+        #
+        # A poll carrying ONE event behaves identically either way, so only
+        # `test_several_new_rows_each_fire_once_oldest_first` fails if this
+        # is removed. That one test is the whole guard.
         self.async_write_ha_state()

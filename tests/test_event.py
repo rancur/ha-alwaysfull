@@ -50,7 +50,20 @@ from .conftest import DEVICE_ID, FakeAlwaysFullClient, load_fixture_data, setup_
 
 ALERT = "event.test_bowl_alert"
 
-# The committed capture: thirteen rows, ids 5000 (NEWEST) to 5012 (oldest).
+# The committed capture: thirteen rows, newest first.
+#
+# Observed reality, from the unsanitised capture of the real bowl: the server
+# returns rows NEWEST FIRST and assigns ASCENDING ids over time, so the
+# highest id is at index 0 and the ids descend down the array. Observed once,
+# from one account, over thirteen rows -- see
+# `test_a_newer_alert_with_a_lower_id_still_fires`. The synthetic ids in the
+# fixture preserve that relationship (5012 newest .. 5000 oldest); an earlier
+# sanitisation pass inverted it, which is a fact about the fixture worth
+# keeping here so nobody re-derives vendor behaviour from a renumbering.
+#
+# New alerts invented by the tests below therefore take ids ABOVE 5012, which
+# is what the real server would assign, EXCEPT where a test is deliberately
+# probing the opposite.
 HISTORY: list[dict[str, Any]] = load_fixture_data("notify_log")["data"]
 
 
@@ -171,7 +184,7 @@ async def test_a_new_row_fires_exactly_one_event_into_the_state_machine(
     entry = await setup_platform(hass, Platform.EVENT)
     events = async_capture_events(hass, EVENT_STATE_CHANGED)
 
-    new = alert_row(4999, "Tilted", "2026-09-17T02:00:00Z")
+    new = alert_row(5100, "Tilted", "2026-09-17T02:00:00Z")
     await poll(hass, entry, mock_api, [new, *HISTORY])
 
     assert fired(events) == ["tilted"]
@@ -181,7 +194,7 @@ async def test_a_new_row_fires_exactly_one_event_into_the_state_machine(
     assert state.attributes[ATTR_EVENT_TYPE] == "tilted"
     assert state.attributes[ATTR_MESSAGE] == new["msg"]
     assert state.attributes[ATTR_CREATED] == "2026-09-17T02:00:00Z"
-    assert state.attributes[ATTR_ALERT_ID] == 4999
+    assert state.attributes[ATTR_ALERT_ID] == 5100
     assert state.attributes[ATTR_RAW_TYPE] == "Tilted"
 
 
@@ -195,7 +208,7 @@ async def test_polling_twice_with_identical_rows_fires_nothing_the_second_time(
     paged every scan interval, forever, for one alert that happened once.
     """
     entry = await setup_platform(hass, Platform.EVENT)
-    rows = [alert_row(4999, "Hardware_Fault"), *HISTORY]
+    rows = [alert_row(5100, "Hardware_Fault"), *HISTORY]
     await poll(hass, entry, mock_api, rows)
 
     first = hass.states.get(ALERT)
@@ -220,10 +233,11 @@ async def test_several_new_rows_each_fire_once_oldest_first(
     """A gap between polls fires every missed alert, in chronological order.
 
     The three new rows are deliberately built so that the server's order,
-    their id order and their chronological order all DISAGREE. Firing in
-    page order, in id order, or newest-first each produces a different
-    sequence from the one asserted here, and each would leave the entity
-    resting on an alert that is not the newest.
+    their id order and their chronological order all DISAGREE -- a
+    synthetic arrangement, not something the vendor was observed doing.
+    Firing in page order, in id order, or newest-first each produces a
+    different sequence from the one asserted here, and each would leave
+    the entity resting on an alert that is not the newest.
 
     This is also the ONLY test that fails if `async_write_ha_state()` is
     dropped after `_trigger_event()`: `CoordinatorEntity` writes state once
@@ -240,15 +254,15 @@ async def test_several_new_rows_each_fire_once_oldest_first(
         entry,
         mock_api,
         [
-            alert_row(4990, "Tilted", "2026-09-17T03:00:00Z"),
-            alert_row(4991, "Fill_Failed", "2026-09-17T01:00:00Z"),
-            alert_row(4992, "Not_Attached", "2026-09-17T02:00:00Z"),
+            alert_row(5100, "Tilted", "2026-09-17T03:00:00Z"),
+            alert_row(5101, "Fill_Failed", "2026-09-17T01:00:00Z"),
+            alert_row(5102, "Not_Attached", "2026-09-17T02:00:00Z"),
             *HISTORY,
         ],
     )
 
     assert fired(events) == ["fill_failed", "not_attached", "tilted"]
-    assert fired(events, ATTR_ALERT_ID) == [4991, 4992, 4990]
+    assert fired(events, ATTR_ALERT_ID) == [5101, 5102, 5100]
     state = hass.states.get(ALERT)
     assert state is not None
     assert state.attributes[ATTR_EVENT_TYPE] == "tilted"
@@ -259,12 +273,25 @@ async def test_a_newer_alert_with_a_lower_id_still_fires(
 ) -> None:
     """Dedupe is a set of seen ids, NOT a high-water mark.
 
-    In the live capture the ids run DOWNWARDS as time runs forwards: id
-    5000 is the newest row and 5012 the oldest. A "fire only ids above the
-    highest seen" watermark therefore seeds itself at 5012 on the first
-    poll and silently suppresses every alert the bowl ever raises after
-    that -- the worst possible failure for this entity, and one that no
-    fixture with ascending ids would ever catch.
+    This tests a HYPOTHETICAL, and says so rather than dressing it up.
+    Observed reality is the opposite: in the unsanitised capture of the
+    real bowl the server assigns ASCENDING ids over time (id 2960335 at
+    2026-09-16T23:35:36Z, id 2954773 at 2026-09-15T22:08:57Z) and returns
+    the page newest-first. A high-water mark would work against that
+    server.
+
+    It would work by relying on an ordering the vendor has never
+    documented and that we have observed exactly once, from one account,
+    over thirteen rows. If that assumption is ever wrong -- a backfilled
+    row, a re-keyed table, a second server assigning ids from its own
+    sequence -- a watermark does not degrade, it seeds itself above every
+    future alert and silently suppresses all of them for ever. A seen-id
+    set costs nothing and cannot fail that way.
+
+    So this is the test that stops someone "optimising" the set into a
+    watermark later, and it is the ONLY test that does: every other test
+    here gives its new alerts a realistic id above the newest on the page,
+    which a watermark handles correctly.
     """
     entry = await setup_platform(hass, Platform.EVENT)
     highest_seen = max(row["id"] for row in HISTORY)
@@ -303,7 +330,7 @@ async def test_every_vendor_alert_type_fires_its_own_event_type(
     to learn two spellings of the same alert.
     """
     entry = await setup_platform(hass, Platform.EVENT)
-    await poll(hass, entry, mock_api, [alert_row(4999, vendor_type), *HISTORY])
+    await poll(hass, entry, mock_api, [alert_row(5100, vendor_type), *HISTORY])
 
     state = hass.states.get(ALERT)
     assert state is not None
@@ -322,7 +349,7 @@ async def test_an_unrecognised_type_fires_unknown_and_keeps_the_raw_string(
     the attributes, so a user can match on it the day it appears.
     """
     entry = await setup_platform(hass, Platform.EVENT)
-    await poll(hass, entry, mock_api, [alert_row(4999, "Bowl_Abducted"), *HISTORY])
+    await poll(hass, entry, mock_api, [alert_row(5100, "Bowl_Abducted"), *HISTORY])
 
     state = hass.states.get(ALERT)
     assert state is not None
@@ -335,7 +362,7 @@ async def test_a_row_with_no_type_fires_unknown(
 ) -> None:
     """A row missing `type` entirely is an unknown alert, not a crash."""
     entry = await setup_platform(hass, Platform.EVENT)
-    await poll(hass, entry, mock_api, [alert_row(4999, drop=("type",)), *HISTORY])
+    await poll(hass, entry, mock_api, [alert_row(5100, drop=("type",)), *HISTORY])
 
     state = hass.states.get(ALERT)
     assert state is not None
@@ -358,7 +385,7 @@ async def test_a_row_with_no_id_is_skipped_without_blocking_the_rest(
 
     rows = [
         alert_row(None, "Hardware_Fault", "2026-09-17T05:00:00Z", drop=("id",)),
-        alert_row(4999, "Tilted", "2026-09-17T04:00:00Z"),
+        alert_row(5100, "Tilted", "2026-09-17T04:00:00Z"),
         *HISTORY,
     ]
     await poll(hass, entry, mock_api, rows)
@@ -402,7 +429,7 @@ async def test_an_outage_does_not_replay_the_page_on_recovery(
     re-fire CANNOT leave this equal.
     """
     entry = await setup_platform(hass, Platform.EVENT)
-    await poll(hass, entry, mock_api, [alert_row(4999, "Tilted"), *HISTORY])
+    await poll(hass, entry, mock_api, [alert_row(5100, "Tilted"), *HISTORY])
     before = hass.states.get(ALERT)
     assert before is not None
     assert before.state != STATE_UNKNOWN
@@ -413,7 +440,7 @@ async def test_an_outage_does_not_replay_the_page_on_recovery(
     assert hass.states.get(ALERT).state == STATE_UNAVAILABLE
 
     mock_api.device_list_error = None
-    await poll(hass, entry, mock_api, [alert_row(4999, "Tilted"), *HISTORY])
+    await poll(hass, entry, mock_api, [alert_row(5100, "Tilted"), *HISTORY])
 
     after = hass.states.get(ALERT)
     assert after is not None
