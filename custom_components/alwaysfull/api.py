@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .const import (
@@ -42,12 +42,28 @@ if TYPE_CHECKING:
 _HTTP_TOO_MANY_REQUESTS = 429
 
 
+def _truncate_offset_to_hours(offset: timedelta) -> int:
+    """Truncate a UTC offset to whole hours, toward zero (not floor).
+
+    A half-hour-or-finer offset like -3:30 must become -3, not -4: floor
+    division on a negative value rounds away from zero, which is wrong here.
+    """
+    return int(offset.total_seconds() / 3600)
+
+
 def _local_time_zone_offset_hours() -> int:
-    """Return the local UTC offset in whole hours, as the vendor app sends it."""
+    """Return the OS's local UTC offset in whole hours, as a last-resort fallback.
+
+    This reads the offset the *process* is running under, which is not
+    necessarily the offset Home Assistant is configured for (a HAOS/Docker
+    host may run `TZ=UTC` while HA itself is configured for another zone).
+    Callers that know the real zone should pass `tz_offset_hours` to
+    `AlwaysFullClient` instead of relying on this.
+    """
     offset = datetime.now().astimezone().utcoffset()
     if offset is None:
         return 0
-    return int(offset.total_seconds() // 3600)
+    return _truncate_offset_to_hours(offset)
 
 
 class AlwaysFullClient:
@@ -58,10 +74,21 @@ class AlwaysFullClient:
         session: aiohttp.ClientSession | None,
         *,
         token: str = "",
+        tz_offset_hours: int | None = None,
     ) -> None:
-        """Store the aiohttp session (may be None for signing-only use) and token."""
+        """Store the aiohttp session (may be None for signing-only use) and token.
+
+        `tz_offset_hours` is the UTC offset, in whole hours, to send as the
+        `timeZone` field. Pass it explicitly whenever the caller knows the
+        zone it actually needs (e.g. Home Assistant's configured time zone,
+        via Task 4's coordinator) — leaving it `None` falls back to the
+        *OS process's* local offset, which can silently disagree with HA's
+        configured zone on a HAOS/Docker host and corrupt the vendor's
+        daily-reset-boundary logic.
+        """
         self._session = session
         self._token = token
+        self._tz_offset_hours = tz_offset_hours
 
     @property
     def token(self) -> str:
@@ -109,11 +136,19 @@ class AlwaysFullClient:
             msg = "AlwaysFullClient has no aiohttp session configured"
             raise AlwaysFullError(msg)
 
+        tz_offset = self._tz_offset_hours if self._tz_offset_hours is not None else _local_time_zone_offset_hours()
+
         merged: dict[str, Any] = dict(params or {})
         merged["appId"] = APP_ID
         merged["appType"] = APP_TYPE
         merged["appVersion"] = APP_VERSION
-        merged["timeZone"] = _local_time_zone_offset_hours()
+        merged["timeZone"] = tz_offset
+
+        # Strip None here, once, so the dict that gets signed is byte-for-byte
+        # the same dict that gets sent — canonical()/sign() already skip None
+        # keys, but json=merged would otherwise serialise them as JSON `null`,
+        # a body/signature mismatch waiting to happen.
+        merged = {key: value for key, value in merged.items() if value is not None}
 
         timestamp = int(time.time() * 1000)
         signature = self.sign(merged, timestamp)
@@ -130,7 +165,6 @@ class AlwaysFullClient:
             query = {
                 key: value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
                 for key, value in merged.items()
-                if value is not None
             }
             async with self._session.request(method_upper, url, headers=headers, params=query) as resp:
                 return await self._handle_response(resp)
