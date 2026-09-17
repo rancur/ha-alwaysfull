@@ -27,8 +27,9 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.components.sensor.const import (
     DEVICE_CLASS_STATE_CLASSES,
     DEVICE_CLASS_UNITS,
+    UNIT_CONVERTERS,
 )
-from homeassistant.const import EntityCategory, UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfTime, UnitOfVolume
 
 from custom_components.alwaysfull import (
     binary_sensor,
@@ -179,9 +180,50 @@ def test_every_unit_that_follows_the_bowl_comes_from_one_definition(units: int) 
 
 
 def assert_sensor_description_legal(description: AlwaysFullSensorEntityDescription) -> None:
-    """Assert one sensor description against Home Assistant's own tables."""
+    """Assert one sensor description against Home Assistant's own tables.
+
+    The checks come in two halves, and the split is deliberate. The first
+    half holds for EVERY sensor, including one that declares no device
+    class -- which two of the shipped sensors already do, and which is the
+    easiest kind of sensor for somebody to add next. This function used to
+    return early on a missing device class, so everything below was
+    unexamined for exactly those.
+    """
     device_class = description.device_class
     state_class = description.state_class
+
+    # -- True of any sensor, device class or not -------------------------
+
+    assert state_class is None or state_class in set(SensorStateClass), (
+        f"{description.key}: {state_class!r} is not a Home Assistant state class"
+    )
+
+    # Home Assistant RAISES on options without the ENUM device class
+    # ("is providing enum options, but is missing the enum device class"),
+    # which is a broken entity rather than a warning.
+    assert description.options is None or device_class is SensorDeviceClass.ENUM, (
+        f"{description.key}: options need the ENUM device class, not {device_class}"
+    )
+
+    # A suggested unit is only legal if something can convert the native
+    # unit into it: the same unit, or a converter registered for this
+    # device class that knows both. With no device class there is no
+    # converter, so any differing suggestion raises at runtime.
+    suggested = description.suggested_unit_of_measurement
+    native = description.native_unit_of_measurement
+    if suggested is not None and suggested != native:
+        converter = UNIT_CONVERTERS.get(device_class)
+        convertible = (
+            converter is not None
+            and native in converter.VALID_UNITS
+            and suggested in converter.VALID_UNITS
+        )
+        assert convertible, (
+            f"{description.key}: native unit {native!r} cannot be converted to the "
+            f"suggested unit {suggested!r} under device class {device_class}"
+        )
+
+    # -- The rest are about a device class, and need one ------------------
 
     if device_class is None:
         return
@@ -240,6 +282,17 @@ def test_sensor_descriptions_are_legal(
             UnitOfVolume.MILLILITERS,
             "state class .* is not permitted for",
         ),
+        # NO DEVICE CLASS, and still illegal. The check used to return
+        # early here, so everything below was unexamined for any sensor
+        # that declared no device class -- which two of the shipped ones
+        # (the connection stamps) already do, and which is the easiest
+        # kind of sensor to add.
+        (
+            None,
+            "totally_increasing",
+            None,
+            "not a Home Assistant state class",
+        ),
     ],
 )
 def test_the_legality_check_rejects_the_two_traps(
@@ -250,9 +303,10 @@ def test_the_legality_check_rejects_the_two_traps(
 ) -> None:
     """Negative control: the check above must actually be able to fail.
 
-    A validator that has only ever been seen green is not a validator. Both
-    of these are the exact mistakes the brief called out, and both are
-    accepted silently by Home Assistant itself.
+    A validator that has only ever been seen green is not a validator. The
+    first two are the exact mistakes the brief called out, and both are
+    accepted silently by Home Assistant itself. The third carries no device
+    class at all, which is the case the check used to skip entirely.
     """
     illegal = AlwaysFullSensorEntityDescription(
         key="illegal",
@@ -262,6 +316,41 @@ def test_the_legality_check_rejects_the_two_traps(
         value_fn=lambda _bowl: None,
     )
     with pytest.raises(AssertionError, match=expected_message):
+        assert_sensor_description_legal(illegal)
+
+
+def test_the_legality_check_rejects_options_without_the_enum_device_class() -> None:
+    """A sensor with options and no ENUM device class is rejected at runtime.
+
+    Home Assistant RAISES `ValueError` on it -- "is providing enum options,
+    but is missing the enum device class" -- which is a broken entity, not
+    a warning. Checked without reference to the device class because the
+    illegal case IS the missing device class.
+    """
+    illegal = AlwaysFullSensorEntityDescription(
+        key="illegal",
+        options=["on", "off"],
+        value_fn=lambda _bowl: None,
+    )
+    with pytest.raises(AssertionError, match="options"):
+        assert_sensor_description_legal(illegal)
+
+
+def test_the_legality_check_rejects_an_unconvertible_suggested_unit() -> None:
+    """A suggested unit needs something able to convert the native one into it.
+
+    With no device class there is no unit converter, so Home Assistant
+    raises `ValueError` ("suggest an incorrect unit of measurement") the
+    first time the entity is added. Another thing the early return let
+    through.
+    """
+    illegal = AlwaysFullSensorEntityDescription(
+        key="illegal",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        suggested_unit_of_measurement=UnitOfTime.DAYS,
+        value_fn=lambda _bowl: None,
+    )
+    with pytest.raises(AssertionError, match="cannot be converted"):
         assert_sensor_description_legal(illegal)
 
 
