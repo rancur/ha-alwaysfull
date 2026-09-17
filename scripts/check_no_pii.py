@@ -536,8 +536,25 @@ RULES: tuple[Rule, ...] = (
         # `[ \t]` rather than `\s`: `_scan` works line by line, so a `\s`
         # that could match a newline would only ever be a way to join two
         # unrelated lines into a false finding.
+        #
+        # `(?<!\d,)` is why a THOUSANDS SEPARATOR is not a house number.
+        # `(?<![\d.])` alone stops a long bare number and a decimal from
+        # starting a match -- `10512000` and `1.67` are both safe -- but it
+        # does nothing about a comma-grouped one, because the character
+        # before the final group is a comma, not a digit. So the prose
+        # "dividing it by 2,592,000 on the way out" matched `000 on the
+        # way`: house number `000`, street name `on the`, street type
+        # `way`. That fired on this repository's own documentation, which
+        # is how it was found.
+        #
+        # This rejects a digit-then-comma before the number and nothing
+        # else, so it cannot hide a real address: an address written after
+        # a comma ("PO Box 5, 12 Test Street") has a SPACE before the house
+        # number and is still caught. What it costs is an address whose
+        # house number is glued to the tail of a number, which is not a way
+        # anyone writes one.
         pattern=re.compile(
-            rf"(?<![\d.])\d{{1,6}}[A-Za-z]?[ \t]+{_STREET_NAME_TOKENS}"
+            rf"(?<![\d.])(?<!\d,)\d{{1,6}}[A-Za-z]?[ \t]+{_STREET_NAME_TOKENS}"
             rf"(?:(?i:{'|'.join(STREET_TYPE_WORDS)})|(?:{'|'.join(STREET_TYPE_ABBREVIATIONS)}))"
             r"\b"
         ),
@@ -646,27 +663,71 @@ def _assert_full_clone() -> None:
         raise SystemExit(2)
 
 
-def scan_working_tree() -> list[Finding]:
-    """Scan every tracked file as it exists ON DISK.
+def working_tree_paths() -> list[str]:
+    """Return every path a commit would pick up: tracked AND untracked.
 
-    `git ls-files` chooses WHICH files to read -- which is how .venv, the
-    caches and everything else ignored stays out of the scan -- but the
-    contents come from the filesystem, never from `git show :<path>`.
+    TWO `git ls-files` calls, and the second one is here because the first
+    one alone was a FALSE GREEN in the exact situation this guard matters
+    most.
+
+    `ls-files -z` lists only what git already tracks. A brand-new file --
+    not yet `git add`ed -- was therefore invisible, and the script printed
+    "clean" over a tree containing it. Reproduced deliberately: a new file
+    holding a street address exited 0 while untracked and 1 once staged.
+    That is backwards. A new file is precisely where fresh personal data
+    arrives, and running the guard BEFORE committing is precisely when a
+    person wants an answer. "Clean" at that moment is the worst answer this
+    script can give, because it is the one that gets believed.
+
+    `--others --exclude-standard` adds the untracked files and keeps
+    honouring `.gitignore`, `.git/info/exclude` and the user's global
+    excludes. Dropping `--exclude-standard` would pull in `.venv`, the
+    caches and every build artefact -- thousands of files, a scan that
+    takes minutes, and findings nobody can act on. A guard that noisy gets
+    switched off, and a switched-off guard protects nothing. The boundary
+    is deliberately "what a commit would pick up", not "every byte on
+    disk".
+
+    Sorted and de-duplicated so the report reads the same way twice. A path
+    cannot appear in both listings today -- tracked and untracked are
+    disjoint by definition -- but the set costs nothing and does not depend
+    on that staying true.
+    """
+    tracked = _git("ls-files", "-z").split("\0")
+    untracked = _git("ls-files", "--others", "--exclude-standard", "-z").split("\0")
+    return sorted({path for path in (*tracked, *untracked) if path})
+
+
+def scan_working_tree() -> list[Finding]:
+    """Scan every file a commit would pick up, as it exists ON DISK.
+
+    `working_tree_paths()` chooses WHICH files to read -- which is how
+    .venv, the caches and everything else ignored stays out of the scan --
+    but the contents come from the filesystem, never from
+    `git show :<path>`.
 
     That distinction is not a detail. `git show :<path>` reads the INDEX,
     so an unstaged edit is invisible to it: the first version of this
     function used it, a fixture was poisoned with a MAC and an address, and
     the guard printed "clean". A tool whose job is to catch what a human
-    missed must read what the human actually has.
+    missed must read what the human actually has -- which is the same
+    reason untracked files are read too.
     """
     findings: list[Finding] = []
-    for path in filter(None, _git("ls-files", "-z").split("\0")):
+    for path in working_tree_paths():
         if path == SELF_PATH:
             continue
         try:
             text = Path(path).read_bytes().decode()
         except FileNotFoundError:
-            # Tracked but deleted in the checkout. History covers it.
+            # Tracked but deleted in the checkout, or a dangling symlink.
+            # History covers the first case and there is nothing to read in
+            # the second.
+            continue
+        except IsADirectoryError:
+            # A symlink to a directory, which git lists as a single entry.
+            # There is no file content behind it; the files inside are
+            # listed separately if they are in the repository at all.
             continue
         except UnicodeDecodeError:
             # A binary file (the brand icon). Nothing to read as text.

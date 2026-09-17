@@ -542,7 +542,7 @@ writes `30 * months * 24 * 60 * 60`.
 
 `cleanWarnTime` has **no** conversion in either direction. It is called out here
 because its absence looks like an oversight and is not: read it raw, write it
-raw. Dividing it by 2,592,000 when writing turns a one-week warning into `0`.
+raw. Dividing it by 2,592,000 on the way out turns a one-week warning into `0`.
 
 **`deviceType` is INVERTED.** VERIFIED: `0` = **9 inch**, `1` = **7 inch**.
 Every reader guesses this the other way round.

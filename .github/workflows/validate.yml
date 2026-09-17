@@ -68,7 +68,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - name: Scan the tree, the full history and every commit message
+      - name: Scan every file a commit would pick up, the full history and every commit message
         # No dependencies: the script is standard library only, so this
         # needs no install step and cannot break when a pin moves.
         run: python scripts/check_no_pii.py

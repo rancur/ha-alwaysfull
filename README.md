@@ -559,11 +559,27 @@ Issues and pull requests are welcome. Start with
 this integration is built on. Two more things to know before you open one:
 
 - **No personal data, ever.** `scripts/check_no_pii.py` runs in CI over the
-  working tree, the full git history *and* every commit message, and fails the
-  build on an email address outside the documentation domains, an RFC1918
-  address, a home-directory path, a 32-hex token, a bare twelve-hex device
-  id, a street address or a US state beside a ZIP code. Use
-  `user@example.com` and the synthetic fixture ids.
+  **whole repository** — every file a commit would pick up, tracked or not,
+  plus the full git history *and* every commit message — and fails the build on
+  an email address outside the documentation domains, an RFC1918 address, a
+  home-directory path, a 32-hex token, a bare twelve-hex device id, a street
+  address or a US state beside a ZIP code. Use `user@example.com` and the
+  synthetic fixture ids.
+
+  **Staging is not the boundary.** A brand-new file you have not `git add`ed
+  is scanned exactly like a tracked one, because that is where fresh personal
+  data actually arrives. Ignored paths (`.gitignore`, so `.venv` and the
+  caches) are the only thing left out. Run it before you commit — it is
+  standard library only and takes a couple of seconds:
+
+  ```bash
+  python scripts/check_no_pii.py
+  ```
+
+  A finding in the working tree is a file to fix. A finding marked `history:`
+  cannot be fixed by a commit: the value is in the object database and needs a
+  history rewrite and a force-push, so it is worth catching before it gets
+  there.
 - **Tests come first, and they have to be able to fail.** Every guard in this
   repository has been run against a deliberately broken implementation and
   observed to fail before it was believed.
