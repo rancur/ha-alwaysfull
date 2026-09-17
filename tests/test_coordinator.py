@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import aiohttp
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -22,6 +24,7 @@ from custom_components.alwaysfull.exceptions import (
     AlwaysFullError,
     AlwaysFullRateLimitError,
 )
+from custom_components.alwaysfull.models import device_label
 
 from .conftest import (
     DEVICE_ID,
@@ -445,3 +448,36 @@ def test_notifications_for_drops_everything_when_none_match():
     rows = [{"id": 1, "deviceId": SECOND_DEVICE_ID}, {"id": 2, "deviceId": SECOND_DEVICE_ID}]
 
     assert AlwaysFullCoordinator._notifications_for(DEVICE_ID, rows) == []
+
+
+async def test_a_failed_post_write_reread_warns_without_naming_the_device(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The re-read failure warns, and the warning carries no MAC address.
+
+    This is a WARNING, so it lands in a default-level `home-assistant.log`
+    with nobody opting in, and that file gets attached to issues wholesale.
+    The vendor's device id IS the bowl's MAC address, so logging it here
+    publishes a hardware identifier through a path no redaction covers --
+    diagnostics redaction cannot reach the log file.
+
+    Both halves are asserted. That the id is absent is the point; that the
+    derived label is PRESENT is what stops the fix being "delete the
+    argument", which would also pass and would leave a two-bowl owner
+    unable to tell which bowl failed.
+    """
+    coordinator = await _setup(hass)
+    caplog.clear()
+
+    # Fail only the scoped re-read. The full refresh that follows is
+    # allowed to succeed, so anything in the log came from this path.
+    mock_api.device_config_error = AlwaysFullError("boom")
+    with caplog.at_level(logging.WARNING, logger="custom_components.alwaysfull"):
+        await coordinator.async_refresh_after_write(DEVICE_ID)
+
+    assert "Could not re-read config" in caplog.text
+    assert DEVICE_ID not in caplog.text
+    assert SECOND_DEVICE_ID not in caplog.text
+    assert device_label(DEVICE_ID) in caplog.text

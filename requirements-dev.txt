@@ -19,4 +19,8 @@ voluptuous==0.16.0                         # HA aliases this to probatio at runt
 # TypeError: ClientResponse.__init__() missing 'stream_writer' against the aiohttp 3.14.3
 # that homeassistant 2026.9.2 pins. Use pytest-homeassistant-custom-component's
 # AiohttpClientMocker / aioclient_mock fixture instead - it tracks HA's aiohttp.
-pillow==12.3.0                             # scripts/make_brand_icon.py only; nothing at runtime imports it
+# Pillow is deliberately NOT pinned here even though
+# scripts/make_brand_icon.py needs it. homeassistant already hard-pins
+# `Pillow==12.3.0`, so a second pin is redundant today and becomes a
+# ResolutionImpossible the day Home Assistant bumps it -- which is
+# exactly the failure the pytest pin above caused.

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
 from typing import Any
 
 # -- Conversion constants (verbatim from the vendor client) -----------------
@@ -65,6 +66,41 @@ BOWL_SIZE_7_INCH = 7
 SLAVE_TYPE_NONE = 0
 SLAVE_TYPE_BOTTLE_PUMP = 1
 SLAVE_TYPE_WALL_UNIT = 2
+
+# How many hex characters of the digest a device label carries. Eight, and
+# deliberately fewer than the twelve of the id it stands in for, so the
+# label cannot be mistaken for (or pattern-matched as) a MAC address.
+DEVICE_LABEL_LENGTH = 8
+
+
+# -- Identity ----------------------------------------------------------------
+
+
+def device_label(device_id: str) -> str:
+    """Return a stable, non-identifying name for one bowl.
+
+    The vendor's device id IS the bowl's MAC address with the separators
+    stripped, so it is a hardware identifier and does not belong anywhere
+    a user will copy from: not in a diagnostics download they paste into a
+    public issue, and not in `home-assistant.log`, which people attach to
+    issues wholesale and which records WARNING without anyone opting in.
+
+    A constant `**REDACTED**` would be safe and useless -- with two bowls
+    every message would look like every other message, and a fault
+    affecting only the second one could not be described. This keeps the
+    two properties that matter (distinct per bowl, identical every time)
+    and carries no identifier.
+
+    ONE definition, used by both the diagnostics file and the log, so a
+    user's log line and their diagnostics download name the same bowl the
+    same way and can be read together.
+
+    Not a security control. A MAC's search space is small enough to
+    enumerate, so this is not claimed to be irreversible; it is here so the
+    address is not sitting in plain text in files people share.
+    """
+    digest = hashlib.sha256(device_id.encode()).hexdigest()[:DEVICE_LABEL_LENGTH]
+    return f"bowl-{digest}"
 
 
 # -- Small standalone conversions --------------------------------------------

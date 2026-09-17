@@ -11,14 +11,19 @@ through `automation.config.async_validate_config_item`, which is the same
 code path the automation editor uses when a user pastes YAML into it. A
 block that fails here is a block that would fail in the user's face.
 
-What this does NOT check is that the entity ids exist -- they cannot, since
-they are named after the reader's own bowl. `test_entity_ids_look_like_ours`
-covers the part that can be checked: that the ids follow the pattern this
-integration actually produces.
+The entity ids cannot be resolved against a live registry, since they are
+named after the reader's own bowl. What is checked instead is the WHOLE id
+against the set this integration would produce, derived from
+`translations/en.json` -- because Home Assistant builds an entity id by
+slugifying the English name, so editing a name in that file silently
+invalidates every example in the README that used it. Checking only the
+domain would let `binary_sensor.water_bowl_fill_alarm` through, which is in
+the right domain and still wrong.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 from homeassistant.components.automation.config import async_validate_config_item
+from homeassistant.util import slugify
 
 from custom_components.alwaysfull.const import ALERT_OPTIONS
 
@@ -36,14 +42,36 @@ README = Path(__file__).parent.parent / "README.md"
 
 YAML_BLOCK = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
 
-# The domains this integration actually creates entities in. An example
-# referring to `light.water_bowl_alert` would validate perfectly and be
-# nonsense.
-OUR_DOMAINS = frozenset(
-    {"sensor", "binary_sensor", "event", "number", "switch", "select", "time", "button"}
-)
+TRANSLATIONS = Path(__file__).parent.parent / "custom_components/alwaysfull/translations/en.json"
 
-ENTITY_ID = re.compile(r"\b([a-z_]+)\.(water_bowl_[a-z0-9_]+)\b")
+# The device name the README tells the reader to substitute. Home Assistant
+# builds an entity id as `<domain>.<device name>_<entity name>`, both
+# slugified, so this is the prefix every example id carries.
+EXAMPLE_DEVICE_SLUG = "water_bowl"
+
+ENTITY_ID = re.compile(rf"\b([a-z_]+)\.({EXAMPLE_DEVICE_SLUG}_[a-z0-9_]+)\b")
+
+
+def _documented_entity_ids() -> dict[str, set[str]]:
+    """Return `{domain: {object_id, ...}}` for every entity this integration makes.
+
+    Derived from `translations/en.json` rather than listed here, because
+    the ENGLISH NAME is what Home Assistant slugifies into an entity id --
+    so the set of legal ids changes the moment a translation is edited, and
+    a hand-maintained copy would go stale exactly when it mattered.
+
+    `homeassistant.util.slugify` is HA's own function, the one that
+    actually builds the id. Reimplementing it here would be asserting the
+    README against a guess at Home Assistant's behaviour.
+    """
+    entities = json.loads(TRANSLATIONS.read_text())["entity"]
+    return {
+        domain: {
+            slugify(f"{EXAMPLE_DEVICE_SLUG} {definition['name']}")
+            for definition in platform.values()
+        }
+        for domain, platform in entities.items()
+    }
 
 
 def _automation_blocks() -> list[tuple[str, dict[str, Any]]]:
@@ -83,18 +111,32 @@ async def test_readme_automations_validate(
 
 
 @pytest.mark.parametrize(("alias", "config"), _automation_blocks(), ids=lambda v: v if isinstance(v, str) else "")
-def test_readme_automations_reference_plausible_entities(alias: str, config: dict[str, Any]) -> None:
-    """Every `water_bowl_*` entity id is in a domain this integration uses.
+def test_readme_automations_reference_entities_this_integration_creates(
+    alias: str, config: dict[str, Any]
+) -> None:
+    """Every `water_bowl_*` id is one this integration would actually create.
 
     The ids are placeholders for the reader's own bowl, so they cannot be
-    resolved. What CAN be checked is that nobody wrote
-    `light.water_bowl_alert` -- a perfectly valid automation referring to
-    an entity this integration will never create.
+    resolved against a live registry. What CAN be checked is the whole id,
+    not merely its domain: `binary_sensor.water_bowl_fill_alarm` is in the
+    right domain and is still wrong, because the entity is named "Water
+    fill alarm" and slugifies to `water_bowl_water_fill_alarm`.
+
+    Checking only the domain would miss precisely the thing that rots --
+    the suffix is what changes when someone edits a name in
+    translations/en.json, and nothing else in the suite reads the README.
     """
+    documented = _documented_entity_ids()
     found = ENTITY_ID.findall(yaml.safe_dump(config))
     assert found, f"{alias} references no entities at all"
     for domain, object_id in found:
-        assert domain in OUR_DOMAINS, f"{alias}: {domain}.{object_id} is not one of our domains"
+        assert domain in documented, (
+            f"{alias}: {domain}.{object_id} -- this integration creates no {domain} entities"
+        )
+        assert object_id in documented[domain], (
+            f"{alias}: {domain}.{object_id} is not an entity this integration creates. "
+            f"Valid {domain} ids: {sorted(documented[domain])}"
+        )
 
 
 def test_readme_only_quotes_real_alert_types() -> None:

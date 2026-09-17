@@ -6,7 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions: {}
+# Read, not empty. An empty permissions block leaves the job with no
+# `contents` scope at all, so `actions/checkout` cannot clone -- which
+# bites on the very first run, before anyone has a green build to
+# compare against. Read is the least this needs and no more.
+permissions:
+  contents: read
 
 env:
   # One place to change it. See the `python-version` matrix below for why

@@ -18,6 +18,13 @@ level, filling and healthy, how much filter life is left, and every setting the
 vendor's app can change. It also turns the bowl's ten alert types into Home
 Assistant triggers — the thing the vendor charges a yearly subscription for.
 
+> **Before you install:** this is **cloud-polled and has no local control path
+> whatsoever** — a full scan of all 65,535 ports on the device found zero open
+> ports. If the vendor's servers are down, so is this. Please read
+> **[Known limitations](#known-limitations)** first; it is the section that
+> decides whether this integration is right for you, and it is a long way down
+> the page.
+
 ---
 
 ## The headline: alerts, without the subscription
@@ -393,9 +400,21 @@ that bowl.
 
 **Filing an issue.** Attach the diagnostics download
 (**Settings → Devices & Services → Always Full → ⋮ → Download diagnostics**).
-It is redacted before it is written: credentials, account id, every device id
-and the text of every alert are replaced with `**REDACTED**`, and each bowl is
-labelled with a derived, non-identifying name. It is safe to post in public.
+
+Every field known to be sensitive is redacted before the file is written: your
+email address, password, session token, account id and every bowl's device id
+are replaced with `**REDACTED**`, and so is the text of each alert, because the
+vendor writes your bowl's MAC address into it. Each bowl appears as a derived
+label like `bowl-1a2b3c4d` instead of its id.
+
+The file **also contains the vendor's raw device record verbatim**, which is
+deliberate — it is what makes a report about an unsupported bowl useful, and it
+carries fields this integration does not model. Redaction works by field name,
+so a field the vendor adds after this was written is passed through unredacted.
+Nothing like that is in the payload today, but "today" is the honest scope of
+that claim. **Skim the file before you post it.** If you find something in
+there that should have been redacted, that is a bug worth its own issue and it
+will be treated as urgent.
 
 ---
 

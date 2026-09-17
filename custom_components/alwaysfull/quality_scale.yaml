@@ -81,12 +81,15 @@ rules:
   test-coverage:
     status: done
     comment: |
-      349 tests, 140 snapshots, 97% statement coverage of
-      custom_components/alwaysfull as measured by
-      `pytest --cov=custom_components.alwaysfull`. The Silver threshold is
-      95%. The figure is recorded with the command that produces it
-      because a bare percentage in a checklist ages badly and cannot be
-      re-checked.
+      358 tests, 140 snapshots, 97% statement coverage of
+      custom_components/alwaysfull, as measured by
+      `pytest -q --cov=custom_components.alwaysfull`. The Silver threshold
+      is 95%.
+
+      The command is recorded with the figure because a bare percentage in
+      a checklist ages badly -- this line said 349 one commit after it
+      became 357, which is the argument for writing down how to re-check
+      rather than trusting the number.
 
   # Gold -- not otherwise tracked; see the header.
   discovery:

@@ -7,7 +7,10 @@ checkable claim if the program is in the repository: anyone can re-run it,
 see that it reproduces the committed bytes, and change the drawing without
 reverse-engineering a PNG.
 
-Requires Pillow (`requirements-dev.txt`). Run from the repository root:
+Requires Pillow, which arrives with `requirements-dev.txt` because Home
+Assistant itself pins it. It is deliberately not pinned again there: a
+second pin would collide the day Home Assistant bumps its own. Run from
+the repository root:
 
     python scripts/make_brand_icon.py
 

@@ -20,12 +20,12 @@ both are easy to get wrong:
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.diagnostics import async_redact_data
 
 from .coordinator import scan_interval_seconds
+from .models import device_label
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -62,30 +62,10 @@ TO_REDACT = {
 }
 
 
-def _bowl_label(device_id: str) -> str:
-    """Return a stable, non-identifying label for one bowl.
-
-    Redacting every device id to the same `**REDACTED**` constant would
-    make a two-bowl report unreadable: every section would look like every
-    other section, and a fault affecting only the second bowl could not be
-    pointed at. This keeps the properties that matter for reading a report
-    -- distinct per bowl, identical across downloads -- and carries no
-    hardware identifier.
-
-    Eight hex characters, deliberately prefixed, so the result cannot be
-    mistaken for (or pattern-matched as) the twelve-hex MAC it replaces.
-
-    Not a security control. A MAC's search space is small enough to
-    enumerate, so this is not claimed to be irreversible; it is here so
-    that the address is not sitting in plain text in a file people share.
-    """
-    return f"bowl-{hashlib.sha256(device_id.encode()).hexdigest()[:8]}"
-
-
 def _bowl_diagnostics(bowl: BowlData) -> dict[str, Any]:
     """Return everything worth knowing about one bowl, before redaction."""
     return {
-        "id": _bowl_label(bowl.device_id),
+        "id": device_label(bowl.device_id),
         "state": dataclasses.asdict(bowl.state),
         "config": dataclasses.asdict(bowl.config),
         "water_today": bowl.water_today,

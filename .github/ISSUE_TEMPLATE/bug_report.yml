@@ -7,7 +7,8 @@ body:
       value: |
         Thanks for taking the time. The two things that resolve an issue
         fastest are the **diagnostics download** and the **debug log** —
-        both are asked for below, and both are safe to post.
+        both are asked for below. Each field explains what it does and does
+        not redact; please read those notes before pasting.
 
   - type: textarea
     id: what-happened
@@ -69,17 +70,22 @@ body:
         **Settings → Devices & Services → Always Full → ⋮ → Download
         diagnostics**, then drag the file into this box.
 
-        **It is safe to post.** The download is redacted before it is
-        written: your email address, password, session token, account id
-        and every bowl's device id are replaced with `**REDACTED**`, and
-        so is the text of each alert — the vendor writes your bowl's MAC
-        address into that message. Each bowl appears as a label like
-        `bowl-1a2b3c4d`, which is derived from its id and tells a reader
-        nothing about your hardware.
+        **Every field known to be sensitive is redacted** before the
+        file is written: your email address, password, session token,
+        account id and every bowl's device id are replaced with
+        `**REDACTED**`, and so is the text of each alert — the vendor
+        writes your bowl's MAC address into that message. Each bowl
+        appears as a label like `bowl-1a2b3c4d`, which is derived from its
+        id and tells a reader nothing about your hardware.
 
-        Nothing else in this repository can produce a file with your
-        credentials in it. If you find something that does, that is itself
-        the bug and it will be treated as urgent.
+        **The file also contains the vendor's raw device record
+        verbatim.** That is deliberate: it is what makes a report about an
+        unsupported bowl useful. But redaction matches field *names*, so a
+        field the vendor adds after this was written would be passed
+        through. **Please skim the file before you post it.**
+
+        No credential or device id is in there today. If you find one,
+        that is itself the bug and it will be treated as urgent.
     validations:
       required: true
 

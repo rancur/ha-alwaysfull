@@ -175,6 +175,11 @@ class FakeAlwaysFullClient:
 
         # Injectable response, so a test can prove a re-read really re-read.
         self.device_config_override: dict[str, Any] | None = None
+        # Injectable failure for the SCOPED post-write re-read, which has
+        # its own error handling and its own log line -- neither of which
+        # `device_list_error` can reach, because a failed device list
+        # aborts the poll before any config is fetched.
+        self.device_config_error: Exception | None = None
 
         # Injectable rows, so a platform test can put the bowl into a state
         # the committed captures do not contain (an alarm raised, a filter
@@ -238,6 +243,8 @@ class FakeAlwaysFullClient:
         bowl was given ITS OWN config, not another bowl's.
         """
         self.device_config_calls.append(device_id)
+        if self.device_config_error is not None:
+            raise self.device_config_error
         config = copy.deepcopy(self.device_config_override or load_fixture_data("device_config"))
         config["devNo"] = device_id
         return config

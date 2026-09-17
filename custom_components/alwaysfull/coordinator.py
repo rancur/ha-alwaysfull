@@ -60,7 +60,7 @@ from .exceptions import (
     AlwaysFullError,
     AlwaysFullRateLimitError,
 )
-from .models import BowlConfig, BowlState
+from .models import BowlConfig, BowlState, device_label
 
 CREDENTIALS_REJECTED_MESSAGE = "Always Full rejected the stored credentials"
 
@@ -317,7 +317,17 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 # The write itself already succeeded; failing here only
                 # means the UI may lag until the next poll, so log it and
                 # let the scheduled refresh below sort it out.
-                LOGGER.warning("Could not re-read config for %s after a write: %s", device_id, err)
+                # `device_label`, never the raw id: the id is the bowl's
+                # MAC address, this is WARNING so it lands in a
+                # default-level `home-assistant.log`, and people attach
+                # that file to issues wholesale. The label is the same one
+                # the diagnostics download uses, so the two can be read
+                # together.
+                LOGGER.warning(
+                    "Could not re-read config for %s after a write: %s",
+                    device_label(device_id),
+                    err,
+                )
             else:
                 self.data[device_id].config = BowlConfig.from_api(raw)
                 self.async_set_updated_data(self.data)
