@@ -48,6 +48,70 @@
       }
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "fill_alarm": {
+        "name": "Water fill alarm"
+      },
+      "filter_fault": {
+        "name": "Filter fault"
+      },
+      "not_level": {
+        "name": "Not level"
+      },
+      "online": {
+        "name": "Online"
+      },
+      "pump_alarm": {
+        "name": "Pump alarm"
+      },
+      "system_problem": {
+        "name": "System problem"
+      },
+      "water_source_detached": {
+        "name": "Water source detached"
+      }
+    },
+    "sensor": {
+      "filter_life": {
+        "name": "Filter life"
+      },
+      "filter_remaining": {
+        "name": "Filter time remaining"
+      },
+      "firmware": {
+        "name": "Firmware version"
+      },
+      "last_alert": {
+        "name": "Last alert",
+        "state": {
+          "Daily_Decreased": "Drank less than usual",
+          "Daily_Maximum": "Daily maximum reached",
+          "Fill_Failed": "Fill failed",
+          "Hardware_Fault": "Hardware fault",
+          "High_Water_Level": "High water level",
+          "Not_Attached": "Water source not attached",
+          "Operation_Confirmation": "Operation confirmed",
+          "Replace_Bowl_Filter": "Replace bowl filter",
+          "Replace_Wall_Filter": "Replace wall filter",
+          "Tilted": "Tilted",
+          "unknown": "Unknown"
+        }
+      },
+      "water_source": {
+        "name": "Water source",
+        "state": {
+          "bottle_pump": "Bottle pump",
+          "none": "None",
+          "unknown": "Unknown",
+          "wall_unit": "Wall unit"
+        }
+      },
+      "water_today": {
+        "name": "Water today"
+      }
+    }
+  },
   "options": {
     "error": {
       "invalid_scan_interval": "Enter a polling interval between 30 and 600 seconds."

@@ -21,14 +21,27 @@ import json
 from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
+from syrupy.assertion import SnapshotAssertion
 
+from custom_components.alwaysfull.const import DOMAIN
+from custom_components.alwaysfull.coordinator import BowlData
 from custom_components.alwaysfull.exceptions import AlwaysFullAuthError
+from custom_components.alwaysfull.models import BowlConfig, BowlState
+
+if TYPE_CHECKING:
+    from homeassistant.const import Platform
+    from homeassistant.core import HomeAssistant
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+# Synthetic account, never a real one.
+ENTRY_DATA = {"email": "user@example.com", "password": "pw", "token": "T"}
 
 # The two bowls in `device_list_multi.json`. Both ids are synthetic.
 DEVICE_ID = "aabbccddeeff"
@@ -130,6 +143,14 @@ class FakeAlwaysFullClient:
         # Injectable response, so a test can prove a re-read really re-read.
         self.device_config_override: dict[str, Any] | None = None
 
+        # Injectable rows, so a platform test can put the bowl into a state
+        # the committed captures do not contain (an alarm raised, a filter
+        # fault, a day with no drinking row yet) without editing a fixture
+        # that other tests assert against.
+        self.device_rows_override: list[dict[str, Any]] | None = None
+        self.notify_rows_override: list[dict[str, Any]] | None = None
+        self.drinking_rows_override: list[dict[str, Any]] | None = None
+
         # Per-device drinking totals, so a multi-device test can prove each
         # bowl got ITS OWN total rather than the first bowl's.
         self.drinking_totals: dict[str, int] = {DEVICE_ID: 903, SECOND_DEVICE_ID: 250}
@@ -167,7 +188,10 @@ class FakeAlwaysFullClient:
             if self.device_list_error_remaining is not None:
                 self.device_list_error_remaining -= 1
             raise self.device_list_error
-        return copy.deepcopy(load_fixture_data("device_list_multi"))
+        envelope = copy.deepcopy(load_fixture_data("device_list_multi"))
+        if self.device_rows_override is not None:
+            envelope["data"] = copy.deepcopy(self.device_rows_override)
+        return envelope
 
     async def device_config(self, device_id: str) -> Any:
         """Return the device-config object for `device_id` from the fixtures.
@@ -189,6 +213,8 @@ class FakeAlwaysFullClient:
         last row the server happened to send.
         """
         self.drinking_log_calls.append((device_id, units, start, end))
+        if self.drinking_rows_override is not None:
+            return copy.deepcopy(self.drinking_rows_override)
         return [
             {"drinkingDate": "1999-12-31", "totalCapacity": 4242},
             {"drinkingDate": start, "totalCapacity": self.drinking_totals.get(device_id, 0)},
@@ -197,7 +223,10 @@ class FakeAlwaysFullClient:
     async def notify_log(self, device_id: str, page_size: int = 20) -> Any:
         """Return the paginated notification-log envelope from the fixtures."""
         self.notify_log_calls.append(device_id)
-        return copy.deepcopy(load_fixture_data("notify_log"))
+        envelope = copy.deepcopy(load_fixture_data("notify_log"))
+        if self.notify_rows_override is not None:
+            envelope["data"] = copy.deepcopy(self.notify_rows_override)
+        return envelope
 
     async def notify_config(self) -> Any:
         """Return the account-level notification config from the fixtures."""
@@ -223,6 +252,88 @@ def mock_api_auth_fails(mock_api: FakeAlwaysFullClient) -> FakeAlwaysFullClient:
     mock_api.fail_device_list(AlwaysFullAuthError("Token expired"))
     mock_api.login_error = AlwaysFullAuthError("Account or password error")
     return mock_api
+
+
+@pytest.fixture
+def snapshot(snapshot: SnapshotAssertion) -> SnapshotAssertion:
+    """Return the snapshot fixture with Home Assistant's serializer applied.
+
+    Requested explicitly rather than relying on the identically named
+    fixture pytest-homeassistant-custom-component ships: whichever plugin
+    pytest registers LAST wins, and in this environment syrupy's own plain
+    fixture was the one that won. The difference is not cosmetic -- without
+    Home Assistant's serializer the snapshot records the raw `repr()`,
+    including the randomly generated registry ids and the wall-clock
+    `created_at`, so every snapshot assertion fails on the very next run.
+    """
+    return snapshot.use_extension(HomeAssistantSnapshotExtension)
+
+
+@pytest.fixture
+def enable_all_entities() -> Generator[None]:
+    """Force-enable entities that ship disabled by default.
+
+    `snapshot_platform` refuses to snapshot a disabled entity, and an
+    entity nobody enables is an entity nobody has ever seen the state of.
+    A plain `property` is a data descriptor, so it wins over the
+    `cached_property` Home Assistant defines AND over anything already
+    cached in an instance `__dict__` -- patching with a `MagicMock`
+    attribute would not.
+    """
+    with patch(
+        "homeassistant.helpers.entity.Entity.entity_registry_enabled_default",
+        property(lambda _self: True),
+    ):
+        yield
+
+
+def device_row(device_id: str = DEVICE_ID, **overrides: Any) -> dict[str, Any]:
+    """Return one committed device-list row with `overrides` applied.
+
+    Used to put a bowl into a state the live capture does not contain
+    (alarm raised, filter fault, detached water source) without editing a
+    fixture other tests assert against.
+    """
+    rows = load_fixture_data("device_list_multi")["data"]
+    row = next(r for r in rows if r["deviceId"] == device_id)
+    return {**copy.deepcopy(row), **overrides}
+
+
+def bowl_data(**overrides: Any) -> BowlData:
+    """Return one `BowlData` built from the committed fixtures.
+
+    Lets a test call a `value_fn` directly. That matters for the enum
+    sensors: Home Assistant stores the literal string `"unknown"` in the
+    same slot it uses for "no value", so at the state-machine level an
+    option of `"unknown"` and a `None` are indistinguishable, and only a
+    direct call can tell the two apart.
+    """
+    row = device_row(**overrides)
+    return BowlData(
+        device_id=row["deviceId"],
+        state=BowlState.from_api(row),
+        config=BowlConfig.from_api(load_fixture_data("device_config")),
+        water_today=None,
+        notifications=load_fixture_data("notify_log")["data"],
+        raw=row,
+    )
+
+
+async def setup_platform(
+    hass: HomeAssistant, platform: Platform, **entry_kwargs: Any
+) -> MockConfigEntry:
+    """Load a config entry with ONLY `platform` forwarded.
+
+    `snapshot_platform` asserts a single platform is loaded, and keeping
+    each platform's test to its own platform means a snapshot diff names
+    the file that caused it.
+    """
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, **entry_kwargs)
+    entry.add_to_hass(hass)
+    with patch("custom_components.alwaysfull.PLATFORMS", [platform]):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    return entry
 
 
 def _configure(

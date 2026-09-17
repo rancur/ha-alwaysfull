@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
     from .coordinator import AlwaysFullConfigEntry
 
-# Filled in by the platform tasks; forwarding an empty list is a no-op.
-PLATFORMS: list[Platform] = []
+# Read platforms. The write platforms are added by a later task.
+PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AlwaysFullConfigEntry) -> bool:
