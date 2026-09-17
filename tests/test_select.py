@@ -26,7 +26,6 @@ from syrupy.assertion import SnapshotAssertion
 
 from custom_components.alwaysfull.exceptions import (
     AlwaysFullError,
-    AlwaysFullRateLimitError,
 )
 
 from .conftest import (
@@ -115,21 +114,22 @@ async def test_bowl_size_writes_the_inverted_enum(
     }
 
 
-async def test_a_select_write_refreshes_the_bowl(
+async def test_a_select_write_requests_a_full_poll(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """The write is followed by a re-read of that bowl's config."""
+    """The write is followed by a full poll of the account.
+
+    Both selects read the DEVICE ROW -- `units` is not in the config object
+    at all -- so there is no written config to publish optimistically and
+    `device/list` is the only thing that can show the new value.
+    """
     await setup_platform(hass, Platform.SELECT)
-    # The debounced full poll that follows a write runs immediately the
-    # first time, and it re-reads BOTH bowls' configs. Failing the device
-    # list makes it contribute nothing, so the one extra config read below
-    # can only have come from the scoped re-read.
-    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
-    before = list(mock_api.device_config_calls)
+    before = mock_api.device_list_calls
 
     await _select(hass, f"{WALL}units", "fl_oz")
+    await hass.async_block_till_done()
 
-    assert mock_api.device_config_calls == [*before, DEVICE_ID]
+    assert mock_api.device_list_calls == before + 1
 
 
 async def test_a_refused_select_write_raises(

@@ -130,13 +130,19 @@ async def test_midnight_writes_zero_not_a_dropped_field(
     assert payload["sleepStart"] is not None
 
 
-async def test_a_time_write_refreshes_that_bowls_config(
+async def test_a_time_write_shows_the_new_window_immediately(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """The UI shows the new window immediately, not after the next poll."""
-    await setup_platform(hass, Platform.TIME)
+    """The UI shows the new window at once, not after the next poll.
 
-    mock_api.device_config_override = load_fixture_data("device_config") | {"sleepStart": 1395}
+    Every config read still serves the fixture's `sleepStart: 1320`
+    (22:00), the way the eventually-consistent vendor serves the pre-write
+    object for around twenty seconds. So 23:15 can only have come from the
+    write.
+    """
+    await setup_platform(hass, Platform.TIME)
+    assert load_fixture_data("device_config")["sleepStart"] == 1320
+
     await _set(hass, f"{WALL}sleep_start", time(23, 15))
 
     assert hass.states.get(f"{WALL}sleep_start").state == "23:15:00"

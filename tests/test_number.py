@@ -303,19 +303,21 @@ async def test_both_thresholds_at_zero_is_allowed(
     }
 
 
-async def test_a_write_refreshes_that_bowls_config(
+async def test_a_write_shows_the_new_value_although_the_vendor_still_lags(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
     """The UI must not bounce back to the pre-write value.
 
-    The scoped re-read is the only path by which the new value can reach
-    the state machine here: the full poll behind it is debounced and has
-    not run by the time this assertion is made.
+    The vendor is eventually consistent, so every config read here goes on
+    serving `cleanCycle: 3600` -- sixty minutes, the pre-write value --
+    exactly as the live server does for around twenty seconds after a
+    write. The new value can therefore only have come from the write
+    itself, which is the whole point.
     """
     await setup_platform(hass, Platform.NUMBER)
     assert float(hass.states.get(f"{WALL}flush_interval").state) == 60
+    assert load_fixture_data("device_config")["cleanCycle"] == 3600
 
-    mock_api.device_config_override = load_fixture_data("device_config") | {"cleanCycle": 1800}
     await _set(hass, f"{WALL}flush_interval", 30)
 
     assert float(hass.states.get(f"{WALL}flush_interval").state) == 30

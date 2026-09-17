@@ -347,17 +347,70 @@ async def test_a_refused_bowl_write_raises(
     assert hass.states.get(bowl_switch(hass, "sleep_mode")).state == STATE_OFF
 
 
-async def test_a_bowl_write_refreshes_that_bowls_config(
+async def test_a_switch_shows_the_written_value_while_the_vendor_still_lags(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """The scoped re-read is what stops the switch flicking back."""
+    """The reported fault, end to end: a successful write read as a failure.
+
+    On real hardware the owner turned "Flush only after filling" on, the
+    vendor accepted it (`fillWashState` went 0 -> 1, siblings untouched)
+    and Home Assistant went on showing `off` for about twenty seconds.
+    The vendor is eventually consistent, so the re-read that followed the
+    write returned the PRE-write object and the integration published it
+    as though it were fresh.
+
+    The fake reproduces exactly that: every config read still serves the
+    committed fixture, where `fillWashState` is 0. Nothing about the
+    vendor's answers changes here -- the switch must read `on` from the
+    write itself.
+    """
     await setup_platform(hass, Platform.SWITCH)
-    assert hass.states.get(bowl_switch(hass, "sleep_mode")).state == STATE_OFF
+    assert hass.states.get(bowl_switch(hass, "flush_after_filling")).state == STATE_OFF
+    assert load_fixture_data("device_config")["fillWashState"] == 0
 
-    mock_api.device_config_override = load_fixture_data("device_config") | {"sleepState": 1}
-    await _turn(hass, bowl_switch(hass, "sleep_mode"), on=True)
+    await _turn(hass, bowl_switch(hass, "flush_after_filling"), on=True)
 
-    assert hass.states.get(bowl_switch(hass, "sleep_mode")).state == STATE_ON
+    assert hass.states.get(bowl_switch(hass, "flush_after_filling")).state == STATE_ON
+
+
+async def test_a_poll_that_disagrees_wins_over_the_written_value(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A write the vendor accepted but never applied must stop showing as applied.
+
+    This is what keeps the optimistic update honest, and it is why the
+    re-read could not simply be deleted: the value the user asked for
+    stands only until a real poll contradicts it.
+    """
+    entry = await setup_platform(hass, Platform.SWITCH)
+    await _turn(hass, bowl_switch(hass, "flush_after_filling"), on=True)
+    assert hass.states.get(bowl_switch(hass, "flush_after_filling")).state == STATE_ON
+
+    # The vendor is still serving `fillWashState: 0`: it never applied it.
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(bowl_switch(hass, "flush_after_filling")).state == STATE_OFF
+
+
+async def test_a_refused_bowl_write_never_shows_the_requested_value(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The optimistic value is applied on SUCCESS, never merely on being asked for.
+
+    Showing the value the user requested after the vendor refused it is
+    worse than showing the old one: it reports a change that did not
+    happen. The cache behind the state machine is asserted too, since a
+    failed service call does not make Home Assistant re-read the entity.
+    """
+    entry = await setup_platform(hass, Platform.SWITCH)
+    mock_api.write_error = AlwaysFullError("Device offline")
+
+    with pytest.raises(HomeAssistantError, match="Device offline"):
+        await _turn(hass, bowl_switch(hass, "flush_after_filling"), on=True)
+
+    assert hass.states.get(bowl_switch(hass, "flush_after_filling")).state == STATE_OFF
+    assert entry.runtime_data.data[DEVICE_ID].config.fill_wash_state == 0
 
 
 def test_the_ten_alert_switches_come_from_the_shared_mapping() -> None:

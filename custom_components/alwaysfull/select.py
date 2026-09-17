@@ -14,8 +14,10 @@ must not re-implement:
 Both values are read from the DEVICE ROW rather than from `device/config`.
 `units` is not in the config object at all, and taking the size from the
 row as well keeps the two selects reading from one source. The cost is
-honest and small: after a change, these two entities catch up on the next
-full poll rather than on the immediate scoped re-read.
+honest and small, and it is why these two writes hand no config to
+`async_write`: there is no written config object to publish, so after a
+change these entities catch up on the poll the write requests rather than
+showing the new option at once.
 """
 
 from __future__ import annotations

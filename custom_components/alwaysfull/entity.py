@@ -415,15 +415,31 @@ class AlwaysFullWriteEntity(AlwaysFullEntity):
             # rather than replaced with a generic failure.
             raise HomeAssistantError(str(err)) from err
         _reject_partial_group(payload)
-        await self.async_write(lambda: group.send(self.coordinator.client, payload))
+        await self.async_write(lambda: group.send(self.coordinator.client, payload), config)
 
-    async def async_write(self, action: Callable[[], Awaitable[Any]]) -> None:
-        """Run one write, surface any failure, then re-read this bowl.
+    async def async_write(
+        self,
+        action: Callable[[], Awaitable[Any]],
+        config: BowlConfig | None = None,
+    ) -> None:
+        """Run one write, surface any failure, then publish what it changed.
+
+        `config` is the mutated copy the payload was built from, and it is
+        passed on ONLY after `async_send_write` has returned without
+        raising -- the point at which the vendor has accepted the write.
+        The coordinator caches it so the entity reads the new value at
+        once, because the vendor's own read-back is stale for around twenty
+        seconds afterwards and would otherwise revert the control the user
+        just operated. See `AlwaysFullCoordinator.async_refresh_after_write`.
+
+        A caller with no config to hand (`select`, `button` -- they write
+        the device row, not the config object) omits it and gets a real
+        poll instead.
 
         Everything happens under the coordinator's write lock: the send AND
-        the re-read that follows it, because the two are one operation and
-        letting the next write start while this one's read-back is still in
-        flight is exactly the overlap the lock exists to prevent.
+        the publish that follows it, because the two are one operation and
+        letting the next write start while this one is still finishing is
+        exactly the overlap the lock exists to prevent.
 
         `action` is called by `async_send_write`, which maps the failures
         and does the one-shot re-login recovery -- so a payload built
@@ -437,7 +453,7 @@ class AlwaysFullWriteEntity(AlwaysFullEntity):
         """
         async with self.coordinator.write_lock:
             await async_send_write(self.coordinator, action)
-            await self.coordinator.async_refresh_after_write(self._device_id)
+            await self.coordinator.async_refresh_after_write(self._device_id, config)
 
     def _require_bowl(self) -> BowlData:
         """Return this bowl, or refuse the write if it is no longer known."""

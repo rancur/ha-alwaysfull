@@ -21,7 +21,6 @@ from syrupy.assertion import SnapshotAssertion
 
 from custom_components.alwaysfull.exceptions import (
     AlwaysFullError,
-    AlwaysFullRateLimitError,
 )
 
 from .conftest import (
@@ -92,21 +91,23 @@ async def test_each_bowl_gets_its_own_button(
     ]
 
 
-async def test_pressing_refreshes_that_bowl(
+async def test_pressing_requests_a_full_poll(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """A reset changes what the filter sensors should read, so re-read it."""
+    """A reset changes what the filter sensors should read, so re-read the bowl.
+
+    A full poll, specifically. A reset zeroes `filterUsedTime`, which lives
+    on the DEVICE ROW and not in the config object, so there is no written
+    config to publish optimistically and `device/list` is the only thing
+    that can show the result.
+    """
     await setup_platform(hass, Platform.BUTTON)
-    # The debounced full poll that follows a write runs immediately the
-    # first time, and it re-reads BOTH bowls' configs. Failing the device
-    # list makes it contribute nothing, so the one extra config read below
-    # can only have come from the scoped re-read.
-    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
-    before = list(mock_api.device_config_calls)
+    before = mock_api.device_list_calls
 
     await _press(hass, WALL)
+    await hass.async_block_till_done()
 
-    assert mock_api.device_config_calls == [*before, DEVICE_ID]
+    assert mock_api.device_list_calls == before + 1
 
 
 async def test_a_refused_press_raises(

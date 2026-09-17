@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 import aiohttp
@@ -28,7 +29,6 @@ from custom_components.alwaysfull.exceptions import (
     AlwaysFullError,
     AlwaysFullRateLimitError,
 )
-from custom_components.alwaysfull.models import device_label
 
 from .conftest import (
     DEVICE_ID,
@@ -38,7 +38,6 @@ from .conftest import (
     FROZEN_ZONE,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
-    load_fixture_data,
     zone_unlike_host,
 )
 
@@ -389,33 +388,66 @@ async def test_scan_interval_reaches_the_coordinator_poll_timer(
     assert entry.runtime_data.update_interval.total_seconds() == 30
 
 
-async def test_refresh_after_write_rereads_that_device_config(
+async def test_a_written_config_is_cached_at_once_and_only_for_that_bowl(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """A write is followed by a config re-read so the UI does not bounce back.
+    """A successful write updates the cache without asking the vendor anything.
 
-    The follow-up poll is sabotaged on purpose: the new value can then only
-    have arrived via the scoped re-read, never via a full refresh that
-    happened to run at the right moment.
+    The vendor is EVENTUALLY CONSISTENT: `/app/device/config` served
+    immediately after a write returns the PRE-write object for around
+    twenty seconds. So the value the user asked for is applied from the
+    write itself, and nothing is re-read here -- a re-read is how the
+    setting used to visibly snap back.
+
+    Both halves are asserted, because "it stopped re-reading" and "it
+    applied the value" are different bugs: the count of config reads must
+    not move, and the other bowl must not be touched.
     """
     coordinator = await _setup(hass)
     assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 60
+    before = list(mock_api.device_config_calls)
 
-    mock_api.device_config_override = load_fixture_data("device_config") | {"cleanCycle": 1800}
-    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
+    written = dataclasses.replace(coordinator.data[DEVICE_ID].config)
+    written.flush_interval_minutes = 30
+    await coordinator.async_refresh_after_write(DEVICE_ID, written)
 
-    await coordinator.async_refresh_after_write(DEVICE_ID)
-
-    # Setup read both bowls; the write re-read ONLY the one written to.
-    assert mock_api.device_config_calls == [DEVICE_ID, SECOND_DEVICE_ID, DEVICE_ID]
     assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 30
     assert coordinator.data[SECOND_DEVICE_ID].config.flush_interval_minutes == 60
+    assert mock_api.device_config_calls == before
 
 
-async def test_refresh_after_write_also_requests_a_full_poll(
+async def test_a_later_poll_overrides_a_written_value_the_vendor_did_not_apply(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """State the write changed still gets picked up by a real poll."""
+    """Reality wins. A write the vendor accepted but ignored must surface.
+
+    This is the other half of the optimistic update, and the one that
+    stops it becoming a lie: the cache shows what was asked for until a
+    real poll disagrees, and then the poll's value is what stands -- even
+    though it is the OLD one.
+    """
+    coordinator = await _setup(hass)
+
+    written = dataclasses.replace(coordinator.data[DEVICE_ID].config)
+    written.flush_interval_minutes = 30
+    await coordinator.async_refresh_after_write(DEVICE_ID, written)
+    assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 30
+
+    # The vendor never applied it and still serves the pre-write object.
+    await coordinator.async_refresh()
+
+    assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 60
+
+
+async def test_a_write_with_no_known_config_requests_a_full_poll(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """State a write changed OUTSIDE the config object still gets picked up.
+
+    `set_units`, `set_device_type` and `reset/filter` change the DEVICE
+    ROW, not the config object, so there is no written config to apply and
+    a real poll is the only thing that can show the result.
+    """
     coordinator = await _setup(hass)
     before = mock_api.device_list_calls
 
@@ -477,39 +509,6 @@ def test_notifications_for_drops_everything_when_none_match():
     rows = [{"id": 1, "deviceId": SECOND_DEVICE_ID}, {"id": 2, "deviceId": SECOND_DEVICE_ID}]
 
     assert AlwaysFullCoordinator._notifications_for(DEVICE_ID, rows) == []
-
-
-async def test_a_failed_post_write_reread_warns_without_naming_the_device(
-    hass: HomeAssistant,
-    mock_api: FakeAlwaysFullClient,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The re-read failure warns, and the warning carries no MAC address.
-
-    This is a WARNING, so it lands in a default-level `home-assistant.log`
-    with nobody opting in, and that file gets attached to issues wholesale.
-    The vendor's device id IS the bowl's MAC address, so logging it here
-    publishes a hardware identifier through a path no redaction covers --
-    diagnostics redaction cannot reach the log file.
-
-    Both halves are asserted. That the id is absent is the point; that the
-    derived label is PRESENT is what stops the fix being "delete the
-    argument", which would also pass and would leave a two-bowl owner
-    unable to tell which bowl failed.
-    """
-    coordinator = await _setup(hass)
-    caplog.clear()
-
-    # Fail only the scoped re-read. The full refresh that follows is
-    # allowed to succeed, so anything in the log came from this path.
-    mock_api.device_config_error = AlwaysFullError("boom")
-    with caplog.at_level(logging.WARNING, logger="custom_components.alwaysfull"):
-        await coordinator.async_refresh_after_write(DEVICE_ID)
-
-    assert "Could not re-read config" in caplog.text
-    assert DEVICE_ID not in caplog.text
-    assert SECOND_DEVICE_ID not in caplog.text
-    assert device_label(DEVICE_ID) in caplog.text
 
 
 async def test_an_empty_device_list_is_warned_about_without_flooding_the_log(

@@ -71,7 +71,7 @@ from .exceptions import (
     AlwaysFullError,
     AlwaysFullRateLimitError,
 )
-from .models import BowlConfig, BowlState, device_label
+from .models import BowlConfig, BowlState
 
 CREDENTIALS_REJECTED_MESSAGE = "Always Full rejected the stored credentials"
 
@@ -363,50 +363,70 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 return entry.get("totalCapacity")
         return None
 
-    async def async_refresh_after_write(self, device_id: str) -> None:
-        """Re-read one device's config right after writing to it.
+    async def async_refresh_after_write(
+        self, device_id: str, config: BowlConfig | None = None
+    ) -> None:
+        """Publish what a successful write changed, without asking the vendor.
 
-        The vendor API is eventually consistent enough that a plain
-        debounced refresh can return the PRE-write config, making a setting
-        visibly snap back in the UI. Re-reading just this device's config
-        and pushing it to listeners immediately avoids that, while the
-        requested refresh still picks up any state the write changed.
+        THE VENDOR IS EVENTUALLY CONSISTENT, and that is the whole reason
+        this method looks the way it does. Observed on real hardware: the
+        owner turned "Flush only after filling" on, the write succeeded
+        (`fillWashState` went 0 -> 1 with its siblings untouched), and
+        `/app/device/config` read back immediately afterwards still
+        returned the PRE-write object. It caught up about twenty seconds
+        later.
+
+        This method used to do exactly that re-read and push the result to
+        listeners as though it were fresh, so the control the user had just
+        operated actively reverted to its old value for those twenty
+        seconds -- the very snap-back the re-read was added to prevent. The
+        re-read is GONE rather than merely reordered, because it has no
+        case left in which it is right: for a config write it returns known
+        stale data, and for a write that is not a config write
+        (`set_units`, `set_device_type`, `reset/filter`) it re-reads an
+        object that write did not touch.
+
+        What replaces it is the value the write itself carried. `config` is
+        the caller's already-mutated copy -- the same object the payload
+        was built from, so what is cached is exactly what was sent. It is
+        copied again here so that a caller reusing its own object later
+        cannot silently edit the coordinator's cache.
+
+        This is optimistic, and it is deliberately not authoritative. The
+        next scheduled poll rebuilds every bowl from the vendor's own
+        answer, so a write the vendor ACCEPTED BUT DID NOT APPLY reverts
+        within one poll interval and the user learns the truth. No extra
+        poll is requested for that: a refresh fired seconds after the write
+        would read the same stale object the re-read did, and re-introduce
+        the bounce through the back door.
+
+        A write with no `config` -- the device-row writers above -- has
+        nothing to apply optimistically, because the values those entities
+        read come from `device/list` rather than from the config object. A
+        real poll is the only thing that can show their result, so those
+        still request one.
         """
-        if self.data and device_id in self.data:
-            try:
-                raw = await self.client.device_config(device_id) or {}
-            except (
-                AlwaysFullError,
-                TimeoutError,
-                aiohttp.ClientError,
-                ValueError,
-            ) as err:
-                # The write itself already succeeded; failing here only
-                # means the UI may lag until the next poll, so log it and
-                # let the scheduled refresh below sort it out.
-                # `device_label`, never the raw id: the id is the bowl's
-                # MAC address, this is WARNING so it lands in a
-                # default-level `home-assistant.log`, and people attach
-                # that file to issues wholesale. The label is the same one
-                # the diagnostics download uses, so the two can be read
-                # together.
-                LOGGER.warning(
-                    "Could not re-read config for %s after a write: %s",
-                    device_label(device_id),
-                    err,
-                )
-            else:
-                self.data[device_id].config = BowlConfig.from_api(raw)
-                self.async_set_updated_data(self.data)
+        if config is not None and self.data and device_id in self.data:
+            self.data[device_id].config = dataclasses.replace(config)
+            self.async_set_updated_data(self.data)
+            return
 
         await self.async_request_refresh()
 
     async def async_refresh_notify_config(self) -> None:
         """Re-read the ACCOUNT's notification config right after writing it.
 
-        The per-device analogue of `async_refresh_after_write`, and it
-        exists for the same reason: `notify/getConfig` is polled only once
-        every `NOTIFY_CONFIG_EVERY_N_POLLS` cycles, so without this a
+        This one DOES re-read, unlike `async_refresh_after_write` above,
+        and the difference is evidence rather than taste. The staleness
+        that method works around was OBSERVED on `/app/device/config`;
+        nothing of the sort has been seen on `notify/getConfig`, and
+        removing a read on the strength of a guess about a different
+        endpoint would be inventing a vendor behaviour. If a notification
+        switch is ever seen snapping back the same way, the fix is the same
+        one: cache the object that was saved and drop this read.
+
+        It exists because `notify/getConfig` is polled only once every
+        `NOTIFY_CONFIG_EVERY_N_POLLS` cycles, so without this a
         notification switch would sit on its pre-write value for up to ten
         poll intervals before catching up.
 
