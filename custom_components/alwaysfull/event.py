@@ -49,6 +49,7 @@ from homeassistant.core import callback
 
 from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, LOGGER, UNKNOWN
 from .entity import AlwaysFullEntity, async_add_bowl_entities
+from .models import device_label
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -240,6 +241,37 @@ class AlwaysFullAlertEvent(AlwaysFullEntity, EventEntity):
         # type error `dict.get` happens not to catch at runtime.
         event_type = (
             ALERT_TYPE_OPTIONS.get(raw_type, UNKNOWN) if isinstance(raw_type, str) else UNKNOWN
+        )
+        # The moment an alert fires, in the log, rather than inferred from
+        # entity state afterwards. This entity is exercised thoroughly
+        # against a fake and has never fired on real hardware -- the live
+        # install reads `unknown` because that bowl has not raised an alert
+        # yet -- so the first genuine one is worth being able to SEE. By
+        # the time anybody looks, the entity's state has moved on and says
+        # nothing about which row produced it.
+        #
+        # DEBUG, not INFO: a chatty bowl raises an `Operation_Confirmation`
+        # every time it fills, and a line per fill in a default-level log
+        # is noise. Whoever is watching for the first real alert turns
+        # debug logging on for this integration.
+        #
+        # BOTH spellings. The normalised one is what an automation matches;
+        # the vendor's own is the only thing that identifies an alert type
+        # shipped after this integration's table was written -- which is
+        # precisely when somebody is reading the log to find out what
+        # happened, and when the normalised value is the useless `unknown`.
+        #
+        # `device_label`, never `self._device_id`: the device id IS the
+        # bowl's MAC address. This one is DEBUG rather than WARNING, but
+        # the file it lands in is the same file people attach to issues
+        # wholesale, and the label is what the device page, the diagnostics
+        # download and the coordinator's warnings already use.
+        LOGGER.debug(
+            "Firing Always Full alert %s (vendor type %s, row id %s) for %s",
+            event_type,
+            raw_type,
+            row.get("id"),
+            device_label(self._device_id),
         )
         self._trigger_event(
             event_type,

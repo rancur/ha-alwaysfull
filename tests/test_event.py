@@ -22,6 +22,7 @@ shipped entity would never update.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -46,6 +47,7 @@ from custom_components.alwaysfull.event import (
     ATTR_MESSAGE,
 )
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
+from custom_components.alwaysfull.models import device_label
 
 from .conftest import (
     DEVICE_ID,
@@ -690,3 +692,48 @@ async def test_each_bowl_fires_only_its_own_alerts(
 
     assert fired(events) == ["tilted", "fill_failed"]
     assert fired(events, ATTR_EVENT_TYPE, SECOND_ALERT) == ["hardware_fault"]
+
+
+async def test_a_fired_alert_is_visible_in_the_debug_log(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fired alert must leave a line naming the type and the row id.
+
+    This entity has never fired on real hardware -- the live install reads
+    `unknown`, because the bowl has not raised an alert since it was
+    installed. When one finally arrives, "did it work?" has to be
+    answerable from the log rather than inferred from entity state, which
+    by then has moved on and says nothing about which row produced it.
+
+    DEBUG, not INFO: a chatty bowl raises an `Operation_Confirmation` every
+    time it fills, and a line per fill in a default-level log would be
+    noise. Someone watching for the first real alert turns debug logging on
+    for this integration, which is the same thing they would do to
+    diagnose anything else here.
+
+    Both the normalised type and the vendor's own spelling are asserted.
+    The normalised one is what an automation matches on; the raw one is the
+    only thing that identifies an alert type the vendor shipped after this
+    integration's table was written, which is exactly the case where
+    somebody is reading the log to find out what happened.
+    """
+    entry = await setup_platform(hass, Platform.EVENT)
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="custom_components.alwaysfull"):
+        await poll(hass, entry, mock_api, [alert_row(5013, "Hardware_Fault"), *HISTORY])
+
+    assert hass.states.get(ALERT).attributes[ATTR_EVENT_TYPE] == "hardware_fault"
+    logged = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "custom_components.alwaysfull" and record.levelno == logging.DEBUG
+    )
+    assert "hardware_fault" in logged
+    assert "Hardware_Fault" in logged
+    assert "5013" in logged
+    # The device id IS the bowl's MAC address and never belongs in a log.
+    assert DEVICE_ID not in logged
+    assert device_label(DEVICE_ID) in logged
