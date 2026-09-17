@@ -19,6 +19,7 @@ from custom_components.alwaysfull.button import BUTTONS
 from custom_components.alwaysfull.const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from custom_components.alwaysfull.coordinator import AlwaysFullCoordinator
 from custom_components.alwaysfull.event import ALERT_EVENTS
+from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
 from custom_components.alwaysfull.number import NUMBERS
 from custom_components.alwaysfull.select import SELECTS
 from custom_components.alwaysfull.sensor import SENSORS
@@ -27,6 +28,7 @@ from custom_components.alwaysfull.time import TIMES
 
 from .conftest import (
     DEVICE_ID,
+    ENTRY_UNIQUE_ID,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
     setup_platforms,
@@ -211,3 +213,51 @@ async def test_a_bowl_is_added_once_however_many_polls_run(
 
     assert len(er.async_entries_for_config_entry(entity_registry, entry.entry_id)) == before
 
+
+
+async def test_a_failed_first_poll_forwards_no_platform_at_all(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """The first refresh must be awaited BEFORE the platforms are forwarded.
+
+    This pins an ordering that is correct today, load-bearing, and that
+    nothing else in this suite would notice losing. It was measured, not
+    assumed: moving `async_forward_entry_setups` ahead of
+    `async_config_entry_first_refresh` left the entire suite green, which is
+    the definition of an unguarded invariant.
+
+    What the ordering buys is that a poll which FAILS -- as opposed to one
+    that legitimately returns no bowls -- aborts setup before a single
+    entity exists. `async_config_entry_first_refresh` raises
+    `ConfigEntryNotReady`, Home Assistant retries the whole entry later, and
+    the user never sees a half-built integration.
+
+    Forward first and that is lost in a way that is quiet rather than
+    obvious: the account-level switches are not gated on the device list at
+    all, so they register, the refresh then fails, and the entry goes to
+    SETUP_RETRY having already published fourteen entities that Home
+    Assistant is about to retry creating. Zero is therefore the assertion --
+    not "fewer than usual", which the per-bowl platforms would satisfy on
+    their own by finding no data to enumerate.
+
+    A rate limit is the failure used because it is the honest kind: the
+    credentials are fine, so this is the recoverable path that really does
+    get retried, rather than an auth failure that ends in a repair flow.
+    """
+    mock_api.fail_device_list(AlwaysFullRateLimitError("429"))
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=ENTRY_UNIQUE_ID,
+        unique_id=ENTRY_UNIQUE_ID,
+        data={"email": ENTRY_UNIQUE_ID, "password": "pw", "token": "T"},
+    )
+    entry.add_to_hass(hass)
+    # Returns False rather than raising: a retryable setup is not an error.
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert er.async_entries_for_config_entry(entity_registry, entry.entry_id) == []

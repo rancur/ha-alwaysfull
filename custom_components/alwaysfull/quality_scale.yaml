@@ -63,7 +63,20 @@ rules:
   has-entity-name: done
   runtime-data: done
   test-before-configure: done
-  test-before-setup: done
+  test-before-setup:
+    status: done
+    comment: |
+      `async_config_entry_first_refresh()` is awaited BEFORE the platforms
+      are forwarded, so a failed first poll raises `ConfigEntryNotReady`
+      without a single entity having been created.
+
+      Spelt out because the ordering is load-bearing and was, until
+      `tests/test_init.py::test_a_failed_first_poll_forwards_no_platform_at_all`,
+      unguarded: moving the forward ahead of the refresh left the whole
+      suite green. The account-level switches are not gated on the device
+      list, so under the wrong ordering they register, the refresh then
+      fails, and the entry reaches SETUP_RETRY with entities already
+      published.
   unique-config-entry: done
 
   # Silver
@@ -81,7 +94,7 @@ rules:
   test-coverage:
     status: done
     comment: |
-      376 tests, 140 snapshots, 97% statement coverage of
+      377 tests, 140 snapshots, 97% statement coverage of
       custom_components/alwaysfull, as measured by
       `pytest -q --cov=custom_components.alwaysfull`. The Silver threshold
       is 95%.
