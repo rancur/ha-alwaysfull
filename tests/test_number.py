@@ -331,3 +331,95 @@ async def test_a_refused_write_raises_and_leaves_the_cache_alone(
     # own config object rather than a copy leaves 30 sitting there, to
     # surface as the truth on the next update that touches this entity.
     assert entry.runtime_data.data[DEVICE_ID].config.flush_interval_minutes == 60
+
+
+# -- Lossy conversions: a no-op set must be a genuine no-op ----------------
+#
+# The vendor's own app gets this wrong. It reads with
+# `Math.floor(filterCanUseTime / 2592e3)` and writes `30 * months * 86400`,
+# while the live bowl was provisioned with 10512000 == 4 * 2628000 (a
+# 365/12-day month). Open its filter screen, press save, change nothing,
+# and the lifetime drops by 1.67 days. It does that every time.
+
+
+async def test_setting_the_filter_lifetime_it_already_shows_sends_the_raw_seconds(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Re-selecting 4 months must write 10512000 back, not 10368000.
+
+    10512000 floors to 4 under the vendor's 30-day month but is not a
+    whole number of them, so converting 4 back would silently shorten the
+    filter's life by 1.67 days -- and again on the next save, for ever.
+    """
+    await setup_platform(hass, Platform.NUMBER)
+    assert float(hass.states.get(f"{WALL}filter_lifetime").state) == 4
+
+    await _set(hass, f"{WALL}filter_lifetime", 4)
+
+    payload = only_write(mock_api, "set_filter_config")
+    assert payload["filterCanUseTime"] == FILTER_CAN_USE
+    assert payload["filterCanUseTime"] != 4 * SECONDS_PER_MONTH
+
+
+async def test_a_real_filter_lifetime_change_still_converts(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The guard is for no-ops only; 5 months is still 5 vendor months.
+
+    Paired with the test above deliberately: an implementation that never
+    converted would pass that one and fail this, and the vendor's own
+    arithmetic is the right arithmetic when the user really is changing
+    something.
+    """
+    await setup_platform(hass, Platform.NUMBER)
+
+    await _set(hass, f"{WALL}filter_lifetime", 5)
+
+    assert only_write(mock_api, "set_filter_config")["filterCanUseTime"] == (
+        5 * SECONDS_PER_MONTH
+    )
+
+
+async def test_the_same_guard_covers_the_other_two_floored_settings(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Flush interval and maintenance interval floor to a coarser unit too.
+
+    The captured bowl divides evenly on both, so this uses a config that
+    does not: 3661 s reads as 61 minutes and 90061 s as 1 day, and writing
+    the displayed value back would quietly discard the remainder.
+    """
+    mock_api.device_config_override = load_fixture_data("device_config") | {
+        "cleanCycle": 3661,
+        "deviceCanUseTime": 90061,
+    }
+    await setup_platform(hass, Platform.NUMBER)
+    assert float(hass.states.get(f"{WALL}flush_interval").state) == 61
+    assert float(hass.states.get(f"{WALL}maintenance_interval").state) == 1
+
+    await _set(hass, f"{WALL}flush_interval", 61)
+    assert only_write(mock_api, "set_flush_config")["cleanCycle"] == 3661
+
+    mock_api.writes.clear()
+    await _set(hass, f"{WALL}maintenance_interval", 1)
+    assert only_write(mock_api, "set_maintenance_config")["deviceCanUseTime"] == 90061
+
+
+async def test_a_real_change_to_those_two_still_converts(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Same pairing as the filter: the guard must not swallow real edits."""
+    mock_api.device_config_override = load_fixture_data("device_config") | {
+        "cleanCycle": 3661,
+        "deviceCanUseTime": 90061,
+    }
+    await setup_platform(hass, Platform.NUMBER)
+
+    await _set(hass, f"{WALL}flush_interval", 45)
+    assert only_write(mock_api, "set_flush_config")["cleanCycle"] == 45 * 60
+
+    mock_api.writes.clear()
+    await _set(hass, f"{WALL}maintenance_interval", 7)
+    assert only_write(mock_api, "set_maintenance_config")["deviceCanUseTime"] == (
+        7 * SECONDS_PER_DAY
+    )

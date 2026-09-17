@@ -190,15 +190,21 @@ class AlwaysFullWriteEntity(AlwaysFullEntity):
     async def async_write(self, action: Callable[[], Awaitable[Any]]) -> None:
         """Run one write, surface any failure, then re-read this bowl.
 
+        Everything happens under the coordinator's write lock: the send AND
+        the re-read that follows it, because the two are one operation and
+        letting the next write start while this one's read-back is still in
+        flight is exactly the overlap the lock exists to prevent.
+
         `action` is called INSIDE the try so that a payload built lazily by
         the caller is covered by the same error mapping.
         """
-        try:
-            await action()
-        except WRITE_FAILURES as err:
-            msg = f"Always Full could not apply the change: {err}"
-            raise HomeAssistantError(msg) from err
-        await self.coordinator.async_refresh_after_write(self._device_id)
+        async with self.coordinator.write_lock:
+            try:
+                await action()
+            except WRITE_FAILURES as err:
+                msg = f"Always Full could not apply the change: {err}"
+                raise HomeAssistantError(msg) from err
+            await self.coordinator.async_refresh_after_write(self._device_id)
 
     def _require_bowl(self) -> BowlData:
         """Return this bowl, or refuse the write if it is no longer known."""
@@ -277,12 +283,15 @@ class AlwaysFullAccountEntity(CoordinatorEntity[AlwaysFullCoordinator]):
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
 
-        try:
-            await self.coordinator.client.save_notify_config(updated)
-        except WRITE_FAILURES as err:
-            msg = f"Always Full could not apply the change: {err}"
-            raise HomeAssistantError(msg) from err
-        await self.coordinator.async_refresh_notify_config()
+        # The same account-wide lock the per-bowl writes take: these are
+        # requests against the same rate-limited account.
+        async with self.coordinator.write_lock:
+            try:
+                await self.coordinator.client.save_notify_config(updated)
+            except WRITE_FAILURES as err:
+                msg = f"Always Full could not apply the change: {err}"
+                raise HomeAssistantError(msg) from err
+            await self.coordinator.async_refresh_notify_config()
 
 
 def _deep_copy_config(config: dict[str, Any]) -> dict[str, Any]:

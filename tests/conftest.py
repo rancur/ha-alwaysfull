@@ -16,6 +16,7 @@ use pytest-homeassistant-custom-component's `aioclient_mock` fixture.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from collections.abc import Generator
@@ -148,6 +149,18 @@ class FakeAlwaysFullClient:
         # values both -- which is the only level at which a minutes-for-
         # seconds or `capacity`-for-`filterCapacity` mistake is visible.
         self.writes: list[tuple[str, dict[str, Any]]] = []
+
+        # Concurrency bookkeeping for the serialisation test. `max_writes_
+        # in_flight` is the high-water mark of writes inside the client at
+        # once; anything above 1 means two vendor requests overlapped.
+        self.writes_in_flight = 0
+        self.max_writes_in_flight = 0
+        # When set, every write blocks here until the test releases it.
+        # Without something to block ON, a write runs to completion the
+        # instant it is called and concurrent callers could never be
+        # OBSERVED to overlap -- the serialisation test would then pass
+        # against an implementation holding no lock at all.
+        self.write_gate: asyncio.Event | None = None
 
         # Injectable failures. `_remaining` of None means "raise forever".
         self.device_list_error: Exception | None = None
@@ -282,61 +295,68 @@ class FakeAlwaysFullClient:
     # armed, so a test gets to assert BOTH what a failing write attempted
     # and that the failure surfaced.
 
-    def _record(self, method: str, payload: dict[str, Any]) -> None:
-        """Record one write, then fail it if a failure is armed."""
+    async def _record(self, method: str, payload: dict[str, Any]) -> None:
+        """Record one write, track overlap, then fail it if a failure is armed."""
         self.writes.append((method, copy.deepcopy(payload)))
+        self.writes_in_flight += 1
+        self.max_writes_in_flight = max(self.max_writes_in_flight, self.writes_in_flight)
+        try:
+            if self.write_gate is not None:
+                await self.write_gate.wait()
+        finally:
+            self.writes_in_flight -= 1
         if self.write_error is not None:
             raise self.write_error
 
     async def save_notify_config(self, config: dict[str, Any]) -> Any:
         """Record the whole notification object and serve it back on the next read."""
-        self._record("save_notify_config", config)
+        await self._record("save_notify_config", config)
         self.saved_notify_config = copy.deepcopy(config)
         return None
 
     async def set_flush_config(self, device_id: str, **fields: Any) -> Any:
         """Record a flush-config write."""
-        self._record("set_flush_config", {"device_id": device_id, **fields})
+        await self._record("set_flush_config", {"device_id": device_id, **fields})
         return None
 
     async def set_sleep_config(self, device_id: str, **fields: Any) -> Any:
         """Record a sleep-config write."""
-        self._record("set_sleep_config", {"device_id": device_id, **fields})
+        await self._record("set_sleep_config", {"device_id": device_id, **fields})
         return None
 
     async def set_filter_config(self, device_id: str, **fields: Any) -> Any:
         """Record a filter-config write."""
-        self._record("set_filter_config", {"device_id": device_id, **fields})
+        await self._record("set_filter_config", {"device_id": device_id, **fields})
         return None
 
     async def set_maintenance_config(self, device_id: str, **fields: Any) -> Any:
         """Record a maintenance-config write."""
-        self._record("set_maintenance_config", {"device_id": device_id, **fields})
+        await self._record("set_maintenance_config", {"device_id": device_id, **fields})
         return None
 
     async def set_water_config(self, device_id: str, **fields: Any) -> Any:
         """Record a water-config write."""
-        self._record("set_water_config", {"device_id": device_id, **fields})
+        await self._record("set_water_config", {"device_id": device_id, **fields})
         return None
 
     async def set_log_config(self, device_id: str, **fields: Any) -> Any:
         """Record a drinking-log-config write."""
-        self._record("set_log_config", {"device_id": device_id, **fields})
+        await self._record("set_log_config", {"device_id": device_id, **fields})
         return None
 
     async def set_units(self, device_id: str, units: int) -> Any:
         """Record a units write."""
-        self._record("set_units", {"device_id": device_id, "units": units})
+        await self._record("set_units", {"device_id": device_id, "units": units})
         return None
 
     async def set_device_type(self, device_id: str, device_type: int) -> Any:
         """Record a bowl-size write."""
-        self._record("set_device_type", {"device_id": device_id, "device_type": device_type})
+        await self._record("set_device_type", {"device_id": device_id, "device_type": device_type})
         return None
 
     async def reset_filter(self, device_id: str) -> Any:
         """Record a filter-life reset."""
-        self._record("reset_filter", {"device_id": device_id})
+        await self._record("reset_filter", {"device_id": device_id})
         return None
 
 
@@ -453,6 +473,19 @@ def entity_id_for(hass: HomeAssistant, domain: str, unique_id: str) -> str:
     return entity_id
 
 
+async def setup_platforms(
+    hass: HomeAssistant, platforms: list[Platform], **entry_kwargs: Any
+) -> MockConfigEntry:
+    """Load a config entry with ONLY `platforms` forwarded."""
+    entry_kwargs.setdefault("unique_id", ENTRY_UNIQUE_ID)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, **entry_kwargs)
+    entry.add_to_hass(hass)
+    with patch("custom_components.alwaysfull.PLATFORMS", platforms):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    return entry
+
+
 async def setup_platform(
     hass: HomeAssistant, platform: Platform, **entry_kwargs: Any
 ) -> MockConfigEntry:
@@ -462,13 +495,7 @@ async def setup_platform(
     each platform's test to its own platform means a snapshot diff names
     the file that caused it.
     """
-    entry_kwargs.setdefault("unique_id", ENTRY_UNIQUE_ID)
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, **entry_kwargs)
-    entry.add_to_hass(hass)
-    with patch("custom_components.alwaysfull.PLATFORMS", [platform]):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    return entry
+    return await setup_platforms(hass, [platform], **entry_kwargs)
 
 
 def _configure(

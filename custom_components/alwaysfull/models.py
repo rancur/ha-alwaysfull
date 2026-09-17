@@ -418,11 +418,14 @@ class BowlConfig:
     def to_log_payload(self, device_id: str) -> dict[str, Any]:
         """Whole-object payload for `set_log_config` (`/app/device/logConfig`).
 
-        `logState` is the only setting this endpoint carries, which makes
-        "whole object" and "just this field" identical TODAY. It is still
-        built here rather than inline at the call site, so that the day the
-        vendor adds a second field to the group there is one place to add
-        it and every caller picks it up.
+        `logState` is the only setting this endpoint carries -- VERIFIED
+        against the vendor's decompiled app, which posts `{...e, devNo}`
+        where the entity carries nothing but `logState`, rather than
+        inferred from the capture. So "whole object" and "just this field"
+        are identical TODAY. It is still built here rather than inline at
+        the call site, so that the day the vendor adds a second field to
+        the group there is one place to add it and every caller picks it
+        up.
         """
         return {
             "device_id": device_id,

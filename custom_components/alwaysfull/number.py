@@ -16,6 +16,29 @@ entity exposes it; it is read as raw seconds and handed straight back by
 `to_maintenance_payload`. See that method's docstring -- an earlier version
 of it claimed a months conversion existed, and acting on that claim is a
 factor-of-2,592,000 mistake.
+
+## Why a no-op set writes the value back unchanged
+
+Three of these settings are stored in seconds and shown in a coarser unit
+(minutes, 30-day months, days), so the display is a FLOOR and the
+round-trip loses whatever did not divide evenly.
+
+That is not hypothetical. The bowl this integration was built against
+reports `filterCanUseTime: 10512000`, which is exactly 4 x 2628000 --
+four months of 365/12 days. The vendor's app reads with
+`Math.floor(filterCanUseTime / 2592e3)` and writes `30 * months * 24 * 60
+* 60`, i.e. a 30-DAY month, so it displays 4 and, on a save that changed
+nothing, writes 10368000. The device was provisioned with one month length
+and the app saves with another, and the filter lifetime quietly loses 1.67
+days every time someone opens that screen and presses save.
+
+`SECONDS_PER_MONTH` stays 2592000: being faithful to the vendor's
+arithmetic is right for a real change, because their server and their app
+are the ecosystem this integration lives in. What is fixed here is the
+no-op. `_unchanged_keeps_raw` leaves the config untouched when the new
+value floors to the value already displayed, so the ORIGINAL seconds are
+what get written back. A genuine change converts normally and the drift
+never accumulates.
 """
 
 from __future__ import annotations
@@ -96,13 +119,41 @@ class AlwaysFullNumberEntityDescription(NumberEntityDescription):
     unit_fn: Callable[[BowlData], str] | None = None
 
 
+def _unchanged_keeps_raw(
+    read: Callable[[BowlConfig], int],
+    write: Callable[[BowlConfig, int], None],
+) -> Callable[[BowlConfig, int], None]:
+    """Wrap a LOSSY setter so that setting the displayed value changes nothing.
+
+    For a setting stored in seconds and shown in a coarser unit, `read` is
+    a floor. Writing the floored value back is a silent downward edit of
+    however much did not divide evenly -- see the module docstring, where
+    the vendor's own app loses 1.67 days of filter life this way.
+
+    So: if the requested value is the one already on display, return
+    without touching the config. The caller holds a COPY of the cached
+    config, so leaving it alone means the device's own raw seconds are
+    what the whole-object payload carries back. Any other value converts
+    normally, because then the user really is asking for a change and the
+    vendor's arithmetic is the right arithmetic to use.
+    """
+
+    def _set(config: BowlConfig, value: int) -> None:
+        if read(config) == value:
+            return
+        write(config, value)
+
+    return _set
+
+
 def _set_flush_interval(config: BowlConfig, value: int) -> None:
     config.flush_interval_minutes = value
 
 
 def _set_flush_duration(config: BowlConfig, value: int) -> None:
     # `cleanTime` is seconds on the wire already: the ONE field in this
-    # group that must not be multiplied.
+    # group that must not be multiplied -- and, being unconverted, the one
+    # flush field that needs no no-op guard.
     config.clean_time = value
 
 
@@ -116,6 +167,19 @@ def _set_filter_capacity(config: BowlConfig, value: int) -> None:
 
 def _set_maintenance_interval(config: BowlConfig, value: int) -> None:
     config.maintenance_interval_days = value
+
+
+# The three lossy ones. `filter_capacity` and the daily thresholds are
+# stored in the unit they are shown in, so they cannot drift.
+_SET_FLUSH_INTERVAL = _unchanged_keeps_raw(
+    lambda config: config.flush_interval_minutes, _set_flush_interval
+)
+_SET_FILTER_LIFE = _unchanged_keeps_raw(
+    lambda config: config.filter_life_months, _set_filter_life
+)
+_SET_MAINTENANCE_INTERVAL = _unchanged_keeps_raw(
+    lambda config: config.maintenance_interval_days, _set_maintenance_interval
+)
 
 
 def _set_day_min_water(config: BowlConfig, value: int) -> None:
@@ -136,7 +200,7 @@ NUMBERS: tuple[AlwaysFullNumberEntityDescription, ...] = (
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda config: config.flush_interval_minutes,
-        set_fn=_set_flush_interval,
+        set_fn=_SET_FLUSH_INTERVAL,
         group=FLUSH_GROUP,
     ),
     AlwaysFullNumberEntityDescription(
@@ -161,7 +225,7 @@ NUMBERS: tuple[AlwaysFullNumberEntityDescription, ...] = (
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda config: config.filter_life_months,
-        set_fn=_set_filter_life,
+        set_fn=_SET_FILTER_LIFE,
         group=FILTER_GROUP,
     ),
     AlwaysFullNumberEntityDescription(
@@ -185,7 +249,7 @@ NUMBERS: tuple[AlwaysFullNumberEntityDescription, ...] = (
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda config: config.maintenance_interval_days,
-        set_fn=_set_maintenance_interval,
+        set_fn=_SET_MAINTENANCE_INTERVAL,
         group=MAINTENANCE_GROUP,
     ),
     AlwaysFullNumberEntityDescription(

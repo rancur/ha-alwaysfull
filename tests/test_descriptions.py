@@ -351,11 +351,19 @@ def test_the_alert_mapping_is_the_only_one() -> None:
 def test_write_platforms_declare_parallel_updates_of_one(module: Any) -> None:
     """Every write platform states `PARALLEL_UPDATES = 1`.
 
-    Not a convention check, unlike the read platforms' `0`: these modules
-    are the only ones in the integration that send requests of their own,
-    against a cloud API that answers 429. A module that dropped the
-    declaration would inherit the platform default and let Home Assistant
-    fan out as many simultaneous requests as the user touched settings.
+    Not a convention check, unlike the read platforms' `0`. These modules
+    are the only ones that send requests of their own, and the value has a
+    real effect: `helpers/service.py::entity_service_call` routes every
+    entity service call through `Entity.async_request_call`, which
+    acquires the platform's semaphore, so `1` serialises concurrent writes
+    WITHIN a platform. Dropping the declaration lets Home Assistant fan out
+    as many simultaneous requests as the user touched settings on that
+    platform.
+
+    What it does not do is serialise ACROSS the five write platforms --
+    each has its own semaphore -- which is what the coordinator's write
+    lock is for. `tests/test_write_serialisation.py` covers that half and
+    records the experiment behind the distinction.
     """
     assert module.PARALLEL_UPDATES == 1
 

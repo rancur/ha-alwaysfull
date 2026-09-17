@@ -34,6 +34,7 @@ loop with no way to fix it.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -148,6 +149,29 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         )
         self.client = client
         self.notify_config: dict[str, Any] | None = None
+        # Serialises the write platforms ACROSS platforms, so a user
+        # changing several settings at once produces sequential vendor
+        # requests instead of a burst at a cloud API that answers 429.
+        #
+        # Precisely what this adds over `PARALLEL_UPDATES = 1`, because it
+        # is easy to get backwards in both directions:
+        #
+        # `PARALLEL_UPDATES = 1` DOES serialise service calls, not merely
+        # entity updates -- `helpers/service.py::entity_service_call` runs
+        # every call through `Entity.async_request_call`, which acquires
+        # the platform's semaphore. But that semaphore belongs to an
+        # `EntityPlatform`, and this integration has FIVE write platforms,
+        # each with its own. A number write and a switch write are gated by
+        # different semaphores and overlap freely; measured, not assumed.
+        # The vendor's rate limit is per ACCOUNT, so that overlap is
+        # exactly what it counts.
+        #
+        # Hence one lock per coordinator -- per account, not per bowl --
+        # covering all five. The `PARALLEL_UPDATES` declarations stay: the
+        # quality scale expects them, and within a platform they are doing
+        # real work. `tests/test_write_serialisation.py` holds the
+        # experiment that settles this.
+        self.write_lock = asyncio.Lock()
         self._poll_count = 0
 
     async def _async_update_data(self) -> dict[str, BowlData]:
