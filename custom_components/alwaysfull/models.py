@@ -35,6 +35,11 @@ Deliberately NOT modeled:
   fields returned by `/app/device/config`. They are not device state, are
   never read by `BowlConfig.from_api`, and therefore can never leak back
   out through any `to_*_payload()` method.
+
+Alert ORDERING lives here too, for the same reason every conversion does:
+two platforms read the notify log (the alert event entity and the
+`last_alert` sensor), and two orderings is two answers to "which alert is
+the newest one".
 """
 
 from __future__ import annotations
@@ -148,6 +153,55 @@ def filter_life_percent(state: dict[str, Any]) -> float | None:
     used = state.get("filterUsedTime") or 0
     remaining = max(can_use - used, 0)
     return remaining / can_use * 100
+
+
+# -- Alert ordering ----------------------------------------------------------
+
+
+def alert_id_order(row_id: Any) -> tuple[int, float, str]:
+    """Return a sort key ordering ids NUMERICALLY where they are numbers.
+
+    `str(row_id)` would be simpler and is wrong: ids 999 and 1000 sharing a
+    `createTime` second sort `"1000" < "999"`, so the batch fires newest
+    first and the entity comes to rest on the OLDER of the two alerts. The
+    vendor stamps `createTime` to whole seconds, so two alerts in the same
+    second is an ordinary occurrence, not a corner case.
+
+    Total and exception-free over anything JSON can produce: numbers (and
+    numeric strings) order together and ahead of non-numeric ids, which
+    then order lexicographically among themselves. A tuple whose elements
+    could be an int in one row and a str in another would raise `TypeError`
+    mid-sort -- inside a coordinator listener, which breaks the update for
+    every other entity too.
+    """
+    try:
+        return (0, float(row_id), "")
+    except (TypeError, ValueError):
+        return (1, 0.0, str(row_id))
+
+
+def alert_sort_key(row: dict[str, Any]) -> tuple[str, int, float, str]:
+    """Return a sort key that puts the OLDEST alert first.
+
+    ONE ordering for every reader of the notify log. The alert event
+    entity sorts a batch with it and the `last_alert` sensor takes the
+    `max` of it, so the "last alert" a user reads off the sensor is by
+    construction the alert the event entity came to rest on. Two
+    orderings disagreed inside any one `createTime` second: the event
+    entity broke the tie on the id while the sensor broke it on whatever
+    order the page happened to arrive in, and a user reading a
+    notification templated off the sensor against an automation triggered
+    off the event saw two different alerts for one bowl.
+
+    Ordered by `createTime`, not by id. The ids are server-assigned, and
+    while they were observed ascending over time, that is an undocumented
+    property of one capture; `createTime` is the field that actually MEANS
+    when the alert happened, and it costs nothing to use. `createTime` is a
+    fixed-width UTC `%Y-%m-%dT%H:%M:%SZ` string, so lexicographic order IS
+    chronological order and no parsing (which could raise mid-update) is
+    needed. The id only breaks ties, and only within one second.
+    """
+    return (str(row.get("createTime") or ""), *alert_id_order(row.get("id")))
 
 
 # -- BowlState: read-only device/detail & device/list rows -------------------

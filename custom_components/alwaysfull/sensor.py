@@ -42,6 +42,7 @@ from .models import (
     SLAVE_TYPE_NONE,
     SLAVE_TYPE_WALL_UNIT,
     UNITS_FLUID_OUNCES,
+    alert_sort_key,
     filter_life_percent,
 )
 
@@ -130,18 +131,22 @@ def _filter_seconds_remaining(bowl: BowlData) -> StateType:
 def _newest_notification(bowl: BowlData) -> dict[str, Any] | None:
     """Return the newest notify-log row, or `None` if the bowl has none.
 
-    The newest row is chosen by `createTime`, NOT by taking `rows[0]`. The
-    captured page happens to arrive newest-first, so trusting the order
-    would look correct against every fixture and silently report a
-    days-old alert the first time the server paginated differently.
-    `createTime` is a fixed-width UTC `%Y-%m-%dT%H:%M:%SZ` string, so
-    lexicographic order IS chronological order and no parsing (which could
-    raise mid-update) is needed.
+    The newest row is chosen by `models.alert_sort_key`, NOT by taking
+    `rows[0]`. The captured page happens to arrive newest-first, so
+    trusting the order would look correct against every fixture and
+    silently report a days-old alert the first time the server paginated
+    differently.
+
+    That key, and not a local `createTime` comparison, because the alert
+    EVENT entity sorts with it too: `createTime` is stamped to whole
+    seconds, so two alerts sharing one is ordinary, and two different
+    tie-breaks meant this sensor and that entity could report different
+    alerts for the same bowl from the same rows.
     """
     rows = [row for row in bowl.notifications if isinstance(row, dict)]
     if not rows:
         return None
-    return max(rows, key=lambda row: row.get("createTime") or "")
+    return max(rows, key=alert_sort_key)
 
 
 def _last_alert(bowl: BowlData) -> StateType:

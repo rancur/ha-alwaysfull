@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES, EventDeviceClass
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.const import EVENT_STATE_CHANGED, STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -53,8 +54,10 @@ from .conftest import (
     DEVICE_ID,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
+    entity_id_for,
     load_fixture_data,
     setup_platform,
+    setup_platforms,
 )
 
 ALERT = "event.test_bowl_alert"
@@ -598,6 +601,40 @@ async def test_two_alerts_in_the_same_second_fire_in_numeric_id_order(
 
     assert fired(events, ATTR_ALERT_ID) == [9999, 10000]
     assert fired(events) == ["fill_failed", "tilted"]
+
+
+async def test_the_sensor_and_the_event_never_disagree_about_the_newest_alert(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """One ordering, so the two platforms cannot name different alerts.
+
+    `last_alert` and this entity answer the same question for the same
+    bowl, from the same rows, and a user reasonably reads one against the
+    other -- a notification templated off the sensor, an automation
+    triggered off the event. Two tie-breaks meant two answers within any
+    one `createTime` second: the event entity resolves the tie on the id,
+    while picking the newest by `createTime` alone resolves it on whatever
+    order the page happened to arrive in.
+
+    The rows here are in the order that makes those two disagree. Which
+    order the vendor actually sends within a tied second is not documented
+    and has never been observed, which is the point: nothing may depend on
+    it.
+    """
+    same_second = "2026-09-17T01:00:00Z"
+    mock_api.notify_rows_override = []
+    entry = await setup_platforms(hass, [Platform.EVENT, Platform.SENSOR])
+
+    await poll(
+        hass,
+        entry,
+        mock_api,
+        [alert_row(9999, "Fill_Failed", same_second), alert_row(10000, "Tilted", same_second)],
+    )
+
+    last_alert = entity_id_for(hass, SENSOR_DOMAIN, f"{DEVICE_ID}_last_alert")
+    assert hass.states.get(ALERT).attributes[ATTR_EVENT_TYPE] == "tilted"
+    assert hass.states.get(last_alert).state == "tilted"
 
 
 async def test_the_dedupe_set_evicts_the_oldest_id_never_the_newest(

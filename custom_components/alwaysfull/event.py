@@ -38,6 +38,12 @@ Two things this platform deliberately does NOT do:
   silently suppresses all of them, for ever. A set of seen ids costs a
   bounded dict and cannot fail that way, whichever way ids are assigned.
   `test_a_newer_alert_with_a_lower_id_still_fires` is what keeps it a set.
+
+The ordering itself lives in `models.alert_sort_key`, not here, because
+the `last_alert` sensor picks its newest row with the very same key. Two
+orderings meant the two platforms could name DIFFERENT alerts for one
+bowl whenever two alerts shared a `createTime` second -- see
+`test_the_sensor_and_the_event_never_disagree_about_the_newest_alert`.
 """
 
 from __future__ import annotations
@@ -49,7 +55,7 @@ from homeassistant.core import callback
 
 from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, LOGGER, UNKNOWN
 from .entity import AlwaysFullEntity, async_add_bowl_entities
-from .models import device_label
+from .models import alert_sort_key, device_label
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -86,42 +92,6 @@ ALERT_EVENTS: tuple[EventEntityDescription, ...] = (
         # NO device class: see the module docstring.
     ),
 )
-
-
-def _id_order(row_id: Any) -> tuple[int, float, str]:
-    """Return a sort key ordering ids NUMERICALLY where they are numbers.
-
-    `str(row_id)` would be simpler and is wrong: ids 999 and 1000 sharing a
-    `createTime` second sort `"1000" < "999"`, so the batch fires newest
-    first and the entity comes to rest on the OLDER of the two alerts. The
-    vendor stamps `createTime` to whole seconds, so two alerts in the same
-    second is an ordinary occurrence, not a corner case.
-
-    Total and exception-free over anything JSON can produce: numbers (and
-    numeric strings) order together and ahead of non-numeric ids, which
-    then order lexicographically among themselves. A tuple whose elements
-    could be an int in one row and a str in another would raise `TypeError`
-    mid-sort -- inside a coordinator listener, which breaks the update for
-    every other entity too.
-    """
-    try:
-        return (0, float(row_id), "")
-    except (TypeError, ValueError):
-        return (1, 0.0, str(row_id))
-
-
-def _chronological(row: dict[str, Any]) -> tuple[str, int, float, str]:
-    """Return a sort key that puts the OLDEST alert first.
-
-    Ordered by `createTime`, not by id. The ids are server-assigned, and
-    while they were observed ascending over time, that is an undocumented
-    property of one capture; `createTime` is the field that actually MEANS
-    when the alert happened, and it costs nothing to use. `createTime` is a
-    fixed-width UTC `%Y-%m-%dT%H:%M:%SZ` string, so lexicographic order IS
-    chronological order and no parsing (which could raise mid-update) is
-    needed. The id only breaks ties, and only within one second.
-    """
-    return (str(row.get("createTime") or ""), *_id_order(row.get("id")))
 
 
 async def async_setup_entry(
@@ -206,7 +176,7 @@ class AlwaysFullAlertEvent(AlwaysFullEntity, EventEntity):
             if row_id is None or row_id in self._seen_ids:
                 continue
             fresh.append(row)
-        return sorted(fresh, key=_chronological)
+        return sorted(fresh, key=alert_sort_key)
 
     def _dedupe_key(self, row: dict[str, Any]) -> Any | None:
         """Return the row's id, or `None` if it has no usable one.
