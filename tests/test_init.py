@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -261,3 +264,26 @@ async def test_a_failed_first_poll_forwards_no_platform_at_all(
 
     assert entry.state is ConfigEntryState.SETUP_RETRY
     assert er.async_entries_for_config_entry(entity_registry, entry.entry_id) == []
+
+
+def test_the_shipped_version_is_the_one_users_are_asked_to_report() -> None:
+    """`manifest.json` and the bug-report template must name the same release.
+
+    No test can catch the real failure -- the version sat at 0.1.0 across
+    three releases because nobody bumped it, and a suite cannot know a
+    release happened. What it CAN do is stop the number existing in two
+    places that disagree: HACS shows the manifest's version and the issue
+    template asks the user for "the version HACS shows", so a template
+    still suggesting an older one invites a bug report against a release
+    that is not the one running.
+
+    Read from the files rather than restated here, since a constant copied
+    into the test is a copy of the thing under test.
+    """
+    root = Path(__file__).parents[1]
+    manifest = json.loads((root / "custom_components/alwaysfull/manifest.json").read_text())
+    template = (root / ".github/ISSUE_TEMPLATE/bug_report.yml").read_text()
+
+    version = manifest["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), version
+    assert f'placeholder: "{version}"' in template
