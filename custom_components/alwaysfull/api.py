@@ -108,6 +108,22 @@ class AlwaysFullClient:
     def token(self, value: str) -> None:
         self._token = value
 
+    @property
+    def tz_offset_hours(self) -> int | None:
+        """Return the UTC offset, in whole hours, sent as `timeZone`."""
+        return self._tz_offset_hours
+
+    @tz_offset_hours.setter
+    def tz_offset_hours(self, value: int | None) -> None:
+        """Update the offset in place.
+
+        Writable because the correct offset is not constant: a zone that
+        observes DST changes offset twice a year, and a client constructed
+        once at config-entry setup would otherwise keep sending the
+        offset that was correct the day Home Assistant last restarted.
+        """
+        self._tz_offset_hours = value
+
     def canonical(self, body: dict[str, Any], timestamp: int) -> str:
         """Build the canonical signing string for ``body`` at ``timestamp``.
 

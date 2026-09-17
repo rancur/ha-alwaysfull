@@ -1,6 +1,11 @@
 """Constants for the Always Full integration."""
 
+import logging
+
+LOGGER = logging.getLogger(__package__)
+
 DOMAIN = "alwaysfull"
+MANUFACTURER = "Always Full"
 API_BASE = "https://app.alwaysfull.com/alwaysfull-biz"
 APP_ID = "appBiz"
 APP_TYPE = "android"
@@ -11,6 +16,10 @@ CONF_SCAN_INTERVAL = "scan_interval"
 DEFAULT_SCAN_INTERVAL = 60
 MIN_SCAN_INTERVAL = 30
 MAX_SCAN_INTERVAL = 600
+
+# `notify/getConfig` is account-level and changes only when the user edits it,
+# so polling it every cycle is pure waste against a rate-limited cloud API.
+NOTIFY_CONFIG_EVERY_N_POLLS = 10
 
 CODE_OK = "200"
 CODE_TOKEN_EXPIRED = "651"
