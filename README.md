@@ -67,7 +67,7 @@ system.
 
 ---
 
-## What this can do that the vendor's app can't
+## Beyond what the app exposes
 
 Reverse-engineering the protocol turned up several things the Always Full app
 either does not do or does wrong. Each of these is a real difference you get by
