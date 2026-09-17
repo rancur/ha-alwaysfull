@@ -35,6 +35,7 @@ from homeassistant.components.sensor import (
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime, UnitOfVolume
 from homeassistant.core import callback
 
+from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, UNKNOWN
 from .entity import AlwaysFullEntity
 from .models import (
     SLAVE_TYPE_BOTTLE_PUMP,
@@ -53,11 +54,10 @@ if TYPE_CHECKING:
 
     from .coordinator import AlwaysFullConfigEntry, AlwaysFullCoordinator, BowlData
 
-# The state reported when the vendor sends a value outside the enum we
-# know. Deliberately the same string Home Assistant uses for "no value":
-# the bowl's water source really is unknown to us, and the vendor's own app
-# labels anything outside its enum "Unknown" too.
-UNKNOWN = "unknown"
+# `UNKNOWN`, `ALERT_TYPE_OPTIONS` and `ATTR_RAW_TYPE` are imported from
+# `const` rather than defined here: the event platform reports the very same
+# alert options, and one mapping shared by both is the only way they cannot
+# drift apart.
 
 # Read-only platform: nothing here talks to the device, every value comes
 # from one shared coordinator poll. Declared explicitly because the
@@ -70,37 +70,12 @@ WATER_SOURCE_OPTIONS = {
     SLAVE_TYPE_WALL_UNIT: "wall_unit",
 }
 
-# The vendor's own alert spelling -> the option this sensor reports.
-#
-# Home Assistant's convention for enum options is lowercase snake_case, and
-# Task 7's event entity exposes `event_types` for these same ten alerts --
-# two lists that disagreed on casing would be a trap for anyone writing
-# automations against both. Written out in full rather than derived with
-# `.lower()` so that a vendor type which is NOT a plain lowercasing (say
-# `HighWaterLevel`) cannot silently produce a new, undeclared option.
-#
-# Normalising throws information away, so the vendor's exact string is kept
-# and published verbatim in the `raw_type` state attribute below.
-ALERT_TYPE_OPTIONS = {
-    "Tilted": "tilted",
-    "Daily_Maximum": "daily_maximum",
-    "Fill_Failed": "fill_failed",
-    "Not_Attached": "not_attached",
-    "High_Water_Level": "high_water_level",
-    "Replace_Wall_Filter": "replace_wall_filter",
-    "Replace_Bowl_Filter": "replace_bowl_filter",
-    "Daily_Decreased": "daily_decreased",
-    "Operation_Confirmation": "operation_confirmation",
-    "Hardware_Fault": "hardware_fault",
-}
-
 # Attributes carrying the vendor's untouched value behind a normalised enum
 # state, including for a value this integration does not know yet: a user
-# can match on it the day the vendor ships a new one, without waiting for us.
-# Without these, an unrecognised value is indistinguishable from no value at
-# all, because Home Assistant renders the `unknown` OPTION exactly like a
-# missing state.
-ATTR_RAW_TYPE = "raw_type"
+# can match on it the day the vendor ships a new one, without waiting for
+# us. Without these, an unrecognised value is indistinguishable from no
+# value at all, because Home Assistant renders the `unknown` OPTION exactly
+# like a missing state.
 ATTR_RAW_SLAVE_TYPE = "raw_slave_type"
 
 
@@ -264,7 +239,7 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         key="last_alert",
         translation_key="last_alert",
         device_class=SensorDeviceClass.ENUM,
-        options=[*ALERT_TYPE_OPTIONS.values(), UNKNOWN],
+        options=ALERT_OPTIONS,
         # Deliberately NOT diagnostic. This is the entity that says what
         # actually went wrong with the bowl, and Home Assistant collapses
         # diagnostic entities by default -- which would bury the one reading

@@ -55,3 +55,47 @@ ALERT_TYPES = [
     "Operation_Confirmation",
     "Hardware_Fault",
 ]
+
+# The value reported when the vendor sends something outside the enum we
+# know. Deliberately the same string Home Assistant uses for "no value":
+# the thing really is unknown to us, and the vendor's own app labels
+# anything outside its enum "Unknown" too.
+UNKNOWN = "unknown"
+
+# The vendor's own alert spelling -> the option this integration reports.
+#
+# It lives here, not in a platform module, because TWO platforms report it:
+# the `last_alert` sensor's enum options and the alert event entity's
+# `event_types`. Two lists that disagreed on casing -- or drifted apart by
+# one entry -- would be a trap for anyone writing automations against both,
+# so there is exactly one mapping and both platforms import it.
+#
+# Written out in full rather than derived with `.lower()` so that a vendor
+# type which is NOT a plain lowercasing (say `HighWaterLevel`) cannot
+# silently produce a new, undeclared option.
+#
+# Normalising throws information away, so the vendor's exact string is also
+# published verbatim, in the `raw_type` attribute of both platforms.
+ALERT_TYPE_OPTIONS = {
+    "Tilted": "tilted",
+    "Daily_Maximum": "daily_maximum",
+    "Fill_Failed": "fill_failed",
+    "Not_Attached": "not_attached",
+    "High_Water_Level": "high_water_level",
+    "Replace_Wall_Filter": "replace_wall_filter",
+    "Replace_Bowl_Filter": "replace_bowl_filter",
+    "Daily_Decreased": "daily_decreased",
+    "Operation_Confirmation": "operation_confirmation",
+    "Hardware_Fault": "hardware_fault",
+}
+
+# Everything an alert can be reported as: the ten known options plus the
+# fallback. The sensor publishes this as its enum `options` and the event
+# entity as its `event_types`, so the two can never disagree.
+ALERT_OPTIONS = [*ALERT_TYPE_OPTIONS.values(), UNKNOWN]
+
+# The vendor's untouched `type` string, carried alongside the normalised
+# value by every entity that normalises it. Without it, an alert type the
+# vendor ships after this table was written is indistinguishable from no
+# alert at all.
+ATTR_RAW_TYPE = "raw_type"

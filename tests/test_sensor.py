@@ -17,15 +17,9 @@ from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 from pytest_homeassistant_custom_component.common import snapshot_platform
 from syrupy.assertion import SnapshotAssertion
 
-from custom_components.alwaysfull.const import ALERT_TYPES
+from custom_components.alwaysfull.const import ATTR_RAW_TYPE, UNKNOWN
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
-from custom_components.alwaysfull.sensor import (
-    ALERT_TYPE_OPTIONS,
-    ATTR_RAW_SLAVE_TYPE,
-    ATTR_RAW_TYPE,
-    SENSORS,
-    UNKNOWN,
-)
+from custom_components.alwaysfull.sensor import ATTR_RAW_SLAVE_TYPE, SENSORS
 
 from .conftest import (
     DEVICE_ID,
@@ -353,15 +347,10 @@ async def test_last_alert_normalises_and_keeps_the_raw_vendor_string(
     assert state.attributes[ATTR_RAW_TYPE] == vendor_type
 
 
-def test_every_known_alert_type_has_an_option() -> None:
-    """`const.ALERT_TYPES` and the sensor's mapping must not drift apart.
-
-    An alert added to `ALERT_TYPES` without a mapping would silently report
-    `unknown` forever, which looks exactly like a vendor type we have never
-    seen rather than like the bug it is.
-    """
-    assert set(ALERT_TYPE_OPTIONS) == set(ALERT_TYPES)
-    assert UNKNOWN not in ALERT_TYPE_OPTIONS.values()
+# The `ALERT_TYPES` drift guard that used to live here moved to
+# `test_descriptions.py::test_the_alert_mapping_is_the_only_one` when Task 7
+# made the mapping shared: it now has to hold for the event platform's
+# `event_types` as well, and one mapping deserves one guard.
 
 
 async def test_last_alert_is_unknown_with_no_rows(
