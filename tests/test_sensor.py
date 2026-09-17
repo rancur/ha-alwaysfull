@@ -407,3 +407,83 @@ async def test_sensors_go_unavailable_and_come_back(
     await coordinator.async_refresh()
     await hass.async_block_till_done()
     assert hass.states.get(f"{WALL}water_today").state == "1000"
+
+
+# -- Fields the vendor returns and its own app never reads -----------------
+#
+# `deviceUsedTime`, `onlineTime` and `offlineTime` sit on every device row
+# and are ignored by the Always Full app, so nothing about them can be
+# checked against its behaviour. What each of these pins is what the
+# integration is entitled to claim about them.
+
+
+async def test_total_runtime_reports_the_vendors_seconds_in_days(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """`deviceUsedTime` is seconds of bowl runtime, displayed in days.
+
+    The native value is the vendor's own seconds and the DURATION device
+    class does the conversion, so the figure asserted here is the fixture's
+    184459 seconds expressed in days -- an implementation that treated the
+    field as minutes or hours would report the same number in the wrong
+    unit and look entirely plausible.
+    """
+    await setup_platform(hass, Platform.SENSOR)
+
+    state = hass.states.get(f"{WALL}total_runtime")
+    assert state is not None
+    assert float(state.state) == pytest.approx(184459 / 86400, abs=0.0001)
+    assert state.attributes["unit_of_measurement"] == "d"
+
+
+async def test_the_connection_stamps_are_published_exactly_as_sent(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The vendor's naive strings are published verbatim, not reinterpreted.
+
+    These are `"YYYY-MM-DD HH:MM:SS"` with NO zone, and the zone the vendor
+    means is unknown (see `sensor.py`). A TIMESTAMP sensor would have to
+    pick one, and picking wrong moves every reading by hours with nothing
+    to show for it. So the state is the string, character for character --
+    if this ever renders as an ISO instant, a zone has been guessed
+    somewhere.
+    """
+    await setup_platform(hass, Platform.SENSOR)
+
+    connected = hass.states.get(f"{WALL}last_connected")
+    assert connected is not None
+    assert connected.state == "2026-09-15 22:08:57"
+    # No device class, so Home Assistant has not parsed it into anything.
+    assert "device_class" not in connected.attributes
+
+
+async def test_last_disconnected_is_unknown_while_the_bowl_is_connected(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """`offlineTime` is the null-when-online half of the pair.
+
+    Shipping both halves rather than merging them into one "last seen"
+    reading is the point: a merge would have to decide which field wins,
+    and the vendor has never said what it does to `onlineTime` when a bowl
+    drops. Two sensors, each carrying exactly one vendor field, cannot be
+    wrong about a rule nobody knows.
+    """
+    await setup_platform(hass, Platform.SENSOR)
+
+    state = hass.states.get(f"{WALL}last_disconnected")
+    assert state is not None
+    assert state.state == STATE_UNKNOWN
+
+
+async def test_a_dropped_bowl_reports_when_it_dropped(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The half that is null while online is the half that matters offline."""
+    mock_api.device_rows_override = [
+        device_row(status=0, offline=True, offlineTime="2026-09-16 04:11:09")
+    ]
+    await setup_platform(hass, Platform.SENSOR)
+
+    state = hass.states.get(f"{WALL}last_disconnected")
+    assert state is not None
+    assert state.state == "2026-09-16 04:11:09"

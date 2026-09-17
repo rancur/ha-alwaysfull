@@ -407,11 +407,43 @@ def test_bowl_config_from_real_device_config_fixture():
     assert "capacity" not in filter_payload
 
 
+def test_bowl_state_carries_the_connection_stamps_verbatim():
+    """`onlineTime` / `offlineTime` are kept as the vendor's own strings.
+
+    Not parsed here, and deliberately so: they are NAIVE
+    `"YYYY-MM-DD HH:MM:SS"` stamps with no zone, and the vendor's zone for
+    them is unknown. Parsing one into a `datetime` means choosing a zone,
+    and a wrong choice silently misplaces every reading by hours. Keeping
+    the string keeps the uncertainty visible.
+    """
+    state = BowlState.from_api(
+        {"onlineTime": "2026-09-15 22:08:57", "offlineTime": "2026-09-14 03:10:00"}
+    )
+    assert state.online_time == "2026-09-15 22:08:57"
+    assert state.offline_time == "2026-09-14 03:10:00"
+
+
+def test_bowl_state_connection_stamps_default_to_none():
+    """`offlineTime` is null while a bowl is connected, and null is not "".
+
+    A missing key and an explicit `null` must both read as `None`: the
+    vendor sends `null` for whichever of the pair does not apply, and a
+    never-connected bowl carries `null` for both.
+    """
+    assert BowlState.from_api({}).online_time is None
+    assert BowlState.from_api({}).offline_time is None
+    assert BowlState.from_api({"onlineTime": None, "offlineTime": None}).online_time is None
+    assert BowlState.from_api({"onlineTime": None, "offlineTime": None}).offline_time is None
+
+
 def test_bowl_state_from_real_device_detail_fixture():
     state = BowlState.from_api(fx("device_detail.json"))
     assert state.is_online is True
     assert state.bowl_size_inches == 9
     assert state.filter_used_time == 184467
+    assert state.device_used_time == 184468
+    assert state.online_time == "2026-09-15 22:08:57"
+    assert state.offline_time is None
     assert state.has_system_problem is False
     assert state.has_injection_alarm is False
     assert state.has_pump_alarm is False

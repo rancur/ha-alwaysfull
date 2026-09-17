@@ -255,6 +255,75 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         attributes_fn=_last_alert_attributes,
     ),
     AlwaysFullSensorEntityDescription(
+        key="device_used_time",
+        translation_key="device_used_time",
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        # Days, because the live bowl reads 265022 seconds and nobody
+        # thinks about a bowl's lifetime in seconds. The NATIVE value stays
+        # the vendor's own seconds, so the conversion is Home Assistant's
+        # and is reversible; a division done here would not be.
+        suggested_unit_of_measurement=UnitOfTime.DAYS,
+        suggested_display_precision=0,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda bowl: bowl.state.device_used_time,
+    ),
+    # -- The two connection stamps --------------------------------------
+    #
+    # PLAIN STRING SENSORS, not TIMESTAMP ones, and that is a decision
+    # rather than an omission.
+    #
+    # `onlineTime` and `offlineTime` arrive as naive
+    # `"YYYY-MM-DD HH:MM:SS"` -- no zone, no offset. A TIMESTAMP sensor
+    # must hand Home Assistant an AWARE datetime, so shipping one means
+    # choosing a zone for the vendor, and choosing wrong moves every
+    # reading by hours while looking entirely normal: the state renders as
+    # a perfectly plausible instant, the history graph is simply in the
+    # wrong place, and nothing anywhere reports an error.
+    #
+    # The zone is not determinable from anything available here:
+    #
+    # - The vendor's own app never reads either field (live-verified; see
+    #   the design doc's "Detail and list rows ... carry six fields the app
+    #   never reads"), so there is no rendering code to inspect and no
+    #   displayed value to compare against.
+    # - The only OTHER timestamps the API returns, on `notify/log`, use a
+    #   different format that carries its zone explicitly
+    #   (`2026-09-16T23:35:36Z`). Two formats from one vendor is evidence
+    #   that these are produced by different code, not that they share a
+    #   zone.
+    # - Every request this client signs carries a `timeZone` field, and the
+    #   vendor demonstrably buckets `drinking/log` by it. So a per-request
+    #   localisation of these stamps is a live possibility, which would
+    #   make "the zone" not even a fixed property of the account.
+    #
+    # Guessing would be cheap to write and impossible to notice was wrong.
+    # The string is published exactly as sent: a user in the bowl's own
+    # locale can read it, an automation can compare it, and the day the
+    # zone IS established these become TIMESTAMP sensors with a conversion
+    # that can be written down.
+    #
+    # BOTH halves ship, rather than one merged "last seen". `offlineTime`
+    # is null while the bowl is connected and `onlineTime` is null on a
+    # bowl that has never connected, but what the vendor does to
+    # `onlineTime` when a connected bowl DROPS has never been observed. A
+    # merged sensor would have to encode an answer to that; two sensors,
+    # each carrying exactly one field verbatim, encode none -- and the pair
+    # is what makes the answer observable the first time a real bowl drops.
+    AlwaysFullSensorEntityDescription(
+        key="online_time",
+        translation_key="online_time",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda bowl: bowl.state.online_time,
+    ),
+    AlwaysFullSensorEntityDescription(
+        key="offline_time",
+        translation_key="offline_time",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda bowl: bowl.state.offline_time,
+    ),
+    AlwaysFullSensorEntityDescription(
         key="firmware",
         translation_key="firmware",
         entity_category=EntityCategory.DIAGNOSTIC,

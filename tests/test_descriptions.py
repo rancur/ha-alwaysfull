@@ -114,6 +114,11 @@ EXPECTED_CATEGORIES = {
     "filter_remaining": None,
     "last_alert": None,
     "water_source": EntityCategory.DIAGNOSTIC,
+    # Three fields the vendor's own app never reads. Useful, but none of
+    # them is what an owner opens the dashboard to look at.
+    "device_used_time": EntityCategory.DIAGNOSTIC,
+    "online_time": EntityCategory.DIAGNOSTIC,
+    "offline_time": EntityCategory.DIAGNOSTIC,
     "firmware": EntityCategory.DIAGNOSTIC,
 }
 # The alert event is the paid-subscription feature this integration gives

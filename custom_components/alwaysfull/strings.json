@@ -132,6 +132,9 @@
       },
       "maintenance_interval": {
         "name": "Maintenance interval"
+      },
+      "maintenance_warning": {
+        "name": "Maintenance warning lead time"
       }
     },
     "select": {
@@ -151,6 +154,9 @@
       }
     },
     "sensor": {
+      "device_used_time": {
+        "name": "Total runtime"
+      },
       "filter_life": {
         "name": "Filter life"
       },
@@ -175,6 +181,12 @@
           "tilted": "Tilted",
           "unknown": "Unknown"
         }
+      },
+      "offline_time": {
+        "name": "Last disconnected"
+      },
+      "online_time": {
+        "name": "Last connected"
       },
       "water_source": {
         "name": "Water source",

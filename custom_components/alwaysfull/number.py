@@ -1,4 +1,4 @@
-"""Number platform for Always Full: the seven numeric settings.
+"""Number platform for Always Full: the eight numeric settings.
 
 Same description-table shape as `sensor.py`, with two extra columns: how a
 new value is applied to the cached config, and which whole-object config
@@ -11,11 +11,16 @@ exactly one place and tested in both directions there. Re-deriving even
 one of them inline would be invisible until someone noticed their bowl
 flushing every thirty seconds.
 
-The one field in these groups with NO conversion is `cleanWarnTime`. No
-entity exposes it; it is read as raw seconds and handed straight back by
-`to_maintenance_payload`. See that method's docstring -- an earlier version
-of it claimed a months conversion existed, and acting on that claim is a
-factor-of-2,592,000 mistake.
+The one field in these groups with NO conversion is `cleanWarnTime`, and
+the `maintenance_warning` entity below is the reason that now matters. It
+is read as raw seconds, SHOWN in seconds and written back as the same raw
+seconds, and `to_maintenance_payload` hands it through untouched. See that
+method's docstring -- an earlier version of it claimed a months conversion
+existed, and acting on that claim is a factor-of-2,592,000 mistake. The
+vendor's own app hard-codes this field to 0 on every write and offers no
+control for it, so there is no app behaviour to copy and nothing to check a
+conversion against; seconds is what the device holds, so seconds is what is
+shown.
 
 ## Why a no-op set writes the value back unchanged
 
@@ -93,6 +98,20 @@ MAX_FLUSH_DURATION_SECONDS = 120
 MAX_FILTER_LIFE_MONTHS = 48
 MAX_FILTER_CAPACITY = 200000000
 MAX_MAINTENANCE_DAYS = 365
+# The maintenance WARNING lead time, in raw seconds, capped at the longest
+# interval it can lead: a warning that fires before the clock it warns
+# about started is not a setting anyone wants.
+#
+# SECONDS is not a presentation choice made lightly -- it is the only unit
+# this entity may use without new code. `models.py` stores `cleanWarnTime`
+# as raw seconds and hands it back raw, with NO conversion in either
+# direction, and says so twice because an earlier docstring wrongly
+# implied a months conversion existed. Showing it in minutes, days or
+# months therefore means WRITING that conversion, in `models.py` where
+# every other one lives and is tested both ways. Doing it inline here, or
+# assuming a conversion already applied, is a factor-of-2,592,000 error
+# that the server accepts silently.
+MAX_MAINTENANCE_WARNING_SECONDS = MAX_MAINTENANCE_DAYS * 86400
 # A guard rail rather than a vendor-documented ceiling: no bowl holds this,
 # and an unbounded box invites a typo that trips the daily-maximum alert
 # for ever. Stated in the bowl's OWN units, which is what the wire carries.
@@ -175,8 +194,16 @@ def _set_maintenance_interval(config: BowlConfig, value: int) -> None:
     config.maintenance_interval_days = value
 
 
-# The three lossy ones. `filter_capacity` and the daily thresholds are
-# stored in the unit they are shown in, so they cannot drift.
+def _set_maintenance_warning(config: BowlConfig, value: int) -> None:
+    # RAW SECONDS, assigned straight to the seconds field. There is no
+    # UI-format property to go through because there is no conversion --
+    # see `MAX_MAINTENANCE_WARNING_SECONDS` and the module docstring.
+    config.clean_warn_time_seconds = value
+
+
+# The three lossy ones. `filter_capacity`, `maintenance_warning` and the
+# daily thresholds are stored in the unit they are shown in, so they cannot
+# drift.
 _SET_FLUSH_INTERVAL = _unchanged_keeps_raw(
     lambda config: config.flush_interval_minutes, _set_flush_interval
 )
@@ -256,6 +283,23 @@ NUMBERS: tuple[AlwaysFullNumberEntityDescription, ...] = (
         mode=NumberMode.BOX,
         value_fn=lambda config: config.maintenance_interval_days,
         set_fn=_SET_MAINTENANCE_INTERVAL,
+        group=MAINTENANCE_GROUP,
+    ),
+    AlwaysFullNumberEntityDescription(
+        key="maintenance_warning",
+        translation_key="maintenance_warning",
+        # Seconds, unconverted, both ways. See the constant above.
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        native_min_value=0,
+        native_max_value=MAX_MAINTENANCE_WARNING_SECONDS,
+        native_step=1,
+        mode=NumberMode.BOX,
+        value_fn=lambda config: config.clean_warn_time_seconds,
+        set_fn=_set_maintenance_warning,
+        # MAINTENANCE, not FILTER. `cleanWarnTime` belongs to
+        # `maintenanceConfig`; the filter endpoint's body is exactly
+        # `{devNo, filterCanUseTime, filterCapacity}`, so a write sent
+        # there would blank the filter settings and never reach this field.
         group=MAINTENANCE_GROUP,
     ),
     AlwaysFullNumberEntityDescription(

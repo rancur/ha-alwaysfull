@@ -177,6 +177,25 @@ class BowlState:
     pump_alarm: int = 0
     horizontal_alarm: int = 0
     offline: bool = False
+    # `onlineTime` / `offlineTime`, kept as the vendor's own strings.
+    #
+    # They arrive as NAIVE `"YYYY-MM-DD HH:MM:SS"` with no zone and no
+    # offset, and which zone the vendor means is not knowable from
+    # anything available: the app never reads either field, so there is no
+    # rendering code to inspect, and the other endpoint that stamps a time
+    # (`notify/log`) uses a DIFFERENT, explicitly-UTC format
+    # (`%Y-%m-%dT%H:%M:%SZ`), so it says nothing about this one.
+    #
+    # `str | None`, never `datetime`, for exactly that reason: parsing
+    # means choosing a zone, and a wrong choice silently misplaces every
+    # reading by hours while looking completely normal. The uncertainty
+    # belongs where a reader can see it.
+    #
+    # Exactly one of the pair is populated at a time -- `offlineTime` is
+    # null while a bowl is connected -- and a bowl that has never connected
+    # carries null for both.
+    online_time: str | None = None
+    offline_time: str | None = None
 
     @classmethod
     def from_api(cls, row: dict[str, Any]) -> BowlState:
@@ -197,6 +216,8 @@ class BowlState:
             pump_alarm=row.get("pumpAlarm", 0),
             horizontal_alarm=row.get("horizontalAlarm", 0),
             offline=bool(row.get("offline", False)),
+            online_time=row.get("onlineTime"),
+            offline_time=row.get("offlineTime"),
         )
 
     @property

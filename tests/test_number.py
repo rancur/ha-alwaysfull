@@ -198,11 +198,11 @@ async def test_clean_warn_time_is_echoed_as_raw_seconds(
 ) -> None:
     """`cleanWarnTime` has NO unit conversion anywhere in this integration.
 
-    Nothing exposes it, so the only correct behaviour is to hand the
-    device's own value straight back. A 30-day-month conversion applied on
-    the way out would turn one week into 0 -- a factor-of-2,592,000 error
-    that the fixture's own `cleanWarnTime: 0` cannot show, which is why
-    this test overrides it with a non-zero value.
+    A neighbouring setting in the same group must hand the device's own
+    value straight back. A 30-day-month conversion applied on the way out
+    would turn one week into 0 -- a factor-of-2,592,000 error that the
+    fixture's own `cleanWarnTime: 0` cannot show, which is why this test
+    overrides it with a non-zero value.
     """
     mock_api.device_config_override = load_fixture_data("device_config") | {
         "cleanWarnTime": 604800
@@ -216,6 +216,56 @@ async def test_clean_warn_time_is_echoed_as_raw_seconds(
         "deviceCanUseTime": 10 * SECONDS_PER_DAY,
         "cleanWarnTime": 604800,
     }
+
+
+async def test_the_maintenance_warning_reads_raw_seconds(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The entity shows the vendor's seconds, unconverted.
+
+    604800 is one week. A entity that divided by a 30-day "month" on the
+    way in would show 0, and one that divided by a day would show 7 -- both
+    of which look like a plausible setting and are neither of them the
+    number the device holds.
+    """
+    mock_api.device_config_override = load_fixture_data("device_config") | {
+        "cleanWarnTime": 604800
+    }
+    await setup_platform(hass, Platform.NUMBER)
+
+    state = hass.states.get(f"{WALL}maintenance_warning_lead_time")
+    assert state is not None
+    assert float(state.state) == 604800
+    assert state.attributes["unit_of_measurement"] == "s"
+
+
+async def test_the_maintenance_warning_writes_raw_seconds_to_its_own_group(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """The value the user types is the value the wire carries, in SECONDS.
+
+    Two separate ways to get this wrong, and both are asserted. Converting
+    on the way out is the factor-of-2,592,000 mistake `models.py` warns
+    about at length: a user asking for one week would be sending 604800
+    thirty-day months, or 0, depending on the direction of the error.
+    Sending it in the FILTER group is the other: `cleanWarnTime` is a
+    `maintenanceConfig` field, and the filter group's body is exactly
+    `{devNo, filterCanUseTime, filterCapacity}` -- a write that landed
+    there would blank the filter settings and never touch the warning.
+    """
+    await setup_platform(hass, Platform.NUMBER)
+
+    await _set(hass, f"{WALL}maintenance_warning_lead_time", 604800)
+
+    assert only_write(mock_api, "set_maintenance_config") == {
+        "device_id": DEVICE_ID,
+        # Unchanged from the fixture: the OTHER field of the group has to
+        # ride along untouched, because these endpoints replace the whole
+        # object they are sent.
+        "deviceCanUseTime": 0,
+        "cleanWarnTime": 604800,
+    }
+    assert [name for name, _payload in mock_api.writes] == ["set_maintenance_config"]
 
 
 async def test_daily_minimum_water_echoes_the_bowls_own_units(

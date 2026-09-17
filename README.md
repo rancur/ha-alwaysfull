@@ -123,7 +123,7 @@ repair flow on its own.
 
 ## Entities
 
-Home Assistant creates **29 entities per bowl**, plus **12 account-level
+Home Assistant creates **33 entities per bowl**, plus **12 account-level
 entities** shared by every bowl on the account.
 
 ### Per bowl
@@ -137,7 +137,17 @@ entities** shared by every bowl on the account.
 | Filter time remaining | Shown in days. Wall unit only. |
 | Water source | `wall_unit`, `bottle_pump`, `none` or `unknown`. Diagnostic. |
 | Last alert | The newest alert's type, as one of the eleven values above. |
+| Total runtime | How long the bowl has been running in total, shown in days. Diagnostic. |
+| Last connected | When the bowl last connected, as the vendor's own `YYYY-MM-DD HH:MM:SS` string. Diagnostic. See the note below. |
+| Last disconnected | When it last dropped off. `unknown` while it is connected — the vendor sends one of this pair at a time. Diagnostic. |
 | Firmware version | Diagnostic, **disabled by default** — the device page already shows it. |
+
+**Why the two connection times are text and not timestamps.** The vendor sends
+them with no time zone and no offset, and nothing available says which zone it
+means: its own app never reads either field, and the only other timestamps in
+the API use a different format that states its zone explicitly. Publishing them
+as real timestamps would mean guessing, and a wrong guess moves every reading by
+hours while looking completely normal. So they are published exactly as sent.
 
 #### Binary sensors
 
@@ -169,6 +179,7 @@ device page.
 | Filter lifetime | number | 0–48 months (a vendor "month" is exactly 30 days, not a calendar month) |
 | Filter capacity | number | 0–200,000,000 mL |
 | Maintenance interval | number | 0–365 days |
+| Maintenance warning lead time | number | 0–31,536,000 **seconds**. How long before the maintenance interval expires you are warned. Seconds because that is exactly what the device stores; the vendor's app writes `0` here on every save and gives you no control over it at all. |
 | Daily minimum water | number | 0–200,000, in the bowl's own unit |
 | Daily maximum water | number | 0–200,000, in the bowl's own unit |
 | Flush only after filling | switch | |
@@ -345,11 +356,6 @@ converted — they are sent to the server in the bowl's own unit.)
 remaining and filter fault apply to the wall unit. On a bottle-pump or
 standalone bowl they report `unknown`, which is honest: the vendor's app hides
 them entirely for those units.
-
-**A bowl added after setup needs a reload.** Entities are created from the
-first poll after the config entry loads. Buying a second bowl and adding it in
-the app will not make it appear on its own — reload the entry
-(**⋮ → Reload**) and its entities are created.
 
 **A daily-threshold write during the post-write window can echo a stale unit.**
 The daily minimum and maximum are sent together with the bowl's `units` value,
