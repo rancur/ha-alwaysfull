@@ -85,16 +85,16 @@
       "last_alert": {
         "name": "Last alert",
         "state": {
-          "Daily_Decreased": "Drank less than usual",
-          "Daily_Maximum": "Daily maximum reached",
-          "Fill_Failed": "Fill failed",
-          "Hardware_Fault": "Hardware fault",
-          "High_Water_Level": "High water level",
-          "Not_Attached": "Water source not attached",
-          "Operation_Confirmation": "Operation confirmed",
-          "Replace_Bowl_Filter": "Replace bowl filter",
-          "Replace_Wall_Filter": "Replace wall filter",
-          "Tilted": "Tilted",
+          "daily_decreased": "Drank less than usual",
+          "daily_maximum": "Daily maximum reached",
+          "fill_failed": "Fill failed",
+          "hardware_fault": "Hardware fault",
+          "high_water_level": "High water level",
+          "not_attached": "Water source not attached",
+          "operation_confirmation": "Operation confirmed",
+          "replace_bowl_filter": "Replace bowl filter",
+          "replace_wall_filter": "Replace wall filter",
+          "tilted": "Tilted",
           "unknown": "Unknown"
         }
       },

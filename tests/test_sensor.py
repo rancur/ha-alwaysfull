@@ -17,8 +17,14 @@ from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 from pytest_homeassistant_custom_component.common import snapshot_platform
 from syrupy.assertion import SnapshotAssertion
 
+from custom_components.alwaysfull.const import ALERT_TYPES
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimitError
-from custom_components.alwaysfull.sensor import SENSORS
+from custom_components.alwaysfull.sensor import (
+    ALERT_TYPE_OPTIONS,
+    ATTR_RAW_TYPE,
+    SENSORS,
+    UNKNOWN,
+)
 
 from .conftest import (
     DEVICE_ID,
@@ -220,7 +226,7 @@ def test_last_alert_value_fn_distinguishes_unknown_from_no_alerts() -> None:
 
     bowl = bowl_data()
     bowl.notifications = [{"type": "Some_New_Vendor_Alert", "createTime": "2026-09-16T10:00:00Z"}]
-    assert description.value_fn(bowl) == "unknown"
+    assert description.value_fn(bowl) == UNKNOWN
 
     bowl.notifications = []
     assert description.value_fn(bowl) is None
@@ -244,21 +250,62 @@ async def test_last_alert_is_the_newest_row_not_the_first(
 
     state = hass.states.get(f"{WALL}last_alert")
     assert state is not None
-    assert state.state == "Fill_Failed"
+    assert state.state == "fill_failed"
+    assert state.attributes[ATTR_RAW_TYPE] == "Fill_Failed"
 
 
-async def test_last_alert_unrecognised_type_becomes_unknown(
-    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+@pytest.mark.parametrize(
+    ("vendor_type", "expected"),
+    [
+        ("Tilted", "tilted"),
+        ("Daily_Maximum", "daily_maximum"),
+        ("Fill_Failed", "fill_failed"),
+        ("Not_Attached", "not_attached"),
+        ("High_Water_Level", "high_water_level"),
+        ("Replace_Wall_Filter", "replace_wall_filter"),
+        ("Replace_Bowl_Filter", "replace_bowl_filter"),
+        ("Daily_Decreased", "daily_decreased"),
+        ("Operation_Confirmation", "operation_confirmation"),
+        ("Hardware_Fault", "hardware_fault"),
+        # Not one of the ten: normalised away, but still recoverable.
+        ("Some_New_Vendor_Alert", "unknown"),
+    ],
+)
+async def test_last_alert_normalises_and_keeps_the_raw_vendor_string(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    vendor_type: str,
+    expected: str,
 ) -> None:
-    """An alert type we have never seen must not break the enum sensor."""
+    """The state is snake_case; the vendor's own spelling survives verbatim.
+
+    Both halves matter. The state is what automations and the recorder see,
+    and it follows Home Assistant's enum convention (and Task 7's event
+    types). The `raw_type` attribute is the escape hatch: normalising is
+    lossy, and for an alert type the vendor adds AFTER this table was
+    written, that attribute is the only place the real name appears.
+    """
     mock_api.notify_rows_override = [
-        {"id": 1, "type": "Some_New_Vendor_Alert", "createTime": "2026-09-16T10:00:00Z"}
+        {"id": 1, "type": vendor_type, "createTime": "2026-09-16T10:00:00Z"}
     ]
     await setup_platform(hass, Platform.SENSOR)
 
     state = hass.states.get(f"{WALL}last_alert")
     assert state is not None
-    assert state.state == "unknown"
+    assert state.state == expected
+    assert state.state in state.attributes["options"]
+    assert state.attributes[ATTR_RAW_TYPE] == vendor_type
+
+
+def test_every_known_alert_type_has_an_option() -> None:
+    """`const.ALERT_TYPES` and the sensor's mapping must not drift apart.
+
+    An alert added to `ALERT_TYPES` without a mapping would silently report
+    `unknown` forever, which looks exactly like a vendor type we have never
+    seen rather than like the bug it is.
+    """
+    assert set(ALERT_TYPE_OPTIONS) == set(ALERT_TYPES)
+    assert UNKNOWN not in ALERT_TYPE_OPTIONS.values()
 
 
 async def test_last_alert_is_unknown_with_no_rows(

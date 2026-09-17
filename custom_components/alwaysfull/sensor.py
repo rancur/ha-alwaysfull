@@ -35,7 +35,6 @@ from homeassistant.components.sensor import (
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime, UnitOfVolume
 from homeassistant.core import callback
 
-from .const import ALERT_TYPES
 from .entity import AlwaysFullEntity
 from .models import (
     SLAVE_TYPE_BOTTLE_PUMP,
@@ -65,6 +64,35 @@ WATER_SOURCE_OPTIONS = {
     SLAVE_TYPE_BOTTLE_PUMP: "bottle_pump",
     SLAVE_TYPE_WALL_UNIT: "wall_unit",
 }
+
+# The vendor's own alert spelling -> the option this sensor reports.
+#
+# Home Assistant's convention for enum options is lowercase snake_case, and
+# Task 7's event entity exposes `event_types` for these same ten alerts --
+# two lists that disagreed on casing would be a trap for anyone writing
+# automations against both. Written out in full rather than derived with
+# `.lower()` so that a vendor type which is NOT a plain lowercasing (say
+# `HighWaterLevel`) cannot silently produce a new, undeclared option.
+#
+# Normalising throws information away, so the vendor's exact string is kept
+# and published verbatim in the `raw_type` state attribute below.
+ALERT_TYPE_OPTIONS = {
+    "Tilted": "tilted",
+    "Daily_Maximum": "daily_maximum",
+    "Fill_Failed": "fill_failed",
+    "Not_Attached": "not_attached",
+    "High_Water_Level": "high_water_level",
+    "Replace_Wall_Filter": "replace_wall_filter",
+    "Replace_Bowl_Filter": "replace_bowl_filter",
+    "Daily_Decreased": "daily_decreased",
+    "Operation_Confirmation": "operation_confirmation",
+    "Hardware_Fault": "hardware_fault",
+}
+
+# The attribute carrying the vendor's untouched `type` string, including for
+# an alert type this integration does not know yet: a user can match on it
+# the day the vendor ships a new one, without waiting for us.
+ATTR_RAW_TYPE = "raw_type"
 
 
 def _wall_unit_only(
@@ -133,12 +161,27 @@ def _newest_notification(bowl: BowlData) -> dict[str, Any] | None:
 
 
 def _last_alert(bowl: BowlData) -> StateType:
-    """Return the newest alert's type, mapped into the enum's options."""
+    """Return the newest alert's type, normalised into the enum's options.
+
+    An alert type the vendor has added since this table was written maps to
+    `unknown` rather than being passed through: an option outside the
+    declared list makes Home Assistant reject the state outright. The raw
+    string stays available through `_last_alert_attributes`.
+    """
     row = _newest_notification(bowl)
     if row is None:
         return None
-    alert_type = row.get("type")
-    return alert_type if alert_type in ALERT_TYPES else UNKNOWN
+    return ALERT_TYPE_OPTIONS.get(row.get("type"), UNKNOWN)
+
+
+def _last_alert_attributes(bowl: BowlData) -> dict[str, Any]:
+    """Return the vendor's own `type` string for the newest alert.
+
+    Always present, so an automation can rely on the key existing; `None`
+    when the bowl has never alerted.
+    """
+    row = _newest_notification(bowl)
+    return {ATTR_RAW_TYPE: None if row is None else row.get("type")}
 
 
 def _water_unit(bowl: BowlData) -> str:
@@ -157,6 +200,9 @@ class AlwaysFullSensorEntityDescription(SensorEntityDescription):
     # sensor -- i.e. water consumed, which the user can switch between
     # millilitres and fluid ounces on the device itself.
     unit_fn: Callable[[BowlData], str] | None = None
+    # Set only where normalising the state throws away something a user
+    # might need -- currently just the vendor's raw alert type.
+    attributes_fn: Callable[[BowlData], dict[str, Any]] | None = None
 
 
 SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
@@ -203,9 +249,10 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         key="last_alert",
         translation_key="last_alert",
         device_class=SensorDeviceClass.ENUM,
-        options=[*ALERT_TYPES, UNKNOWN],
+        options=[*ALERT_TYPE_OPTIONS.values(), UNKNOWN],
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_alert,
+        attributes_fn=_last_alert_attributes,
     ),
     AlwaysFullSensorEntityDescription(
         key="firmware",
@@ -274,3 +321,12 @@ class AlwaysFullSensor(AlwaysFullEntity, SensorEntity):
         if bowl is None:
             return None
         return self.entity_description.value_fn(bowl)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the sensor's extra attributes, if it has any."""
+        attributes_fn = self.entity_description.attributes_fn
+        bowl = self.bowl
+        if attributes_fn is None or bowl is None:
+            return None
+        return attributes_fn(bowl)
