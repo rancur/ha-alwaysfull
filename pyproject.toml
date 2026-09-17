@@ -1,5 +1,9 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# pytest-homeassistant-custom-component ships autouse *async* fixtures. Without
+# asyncio_mode = "auto" they are collected as plain generator fixtures, which
+# emits PytestRemovedIn9Warning and leaves the `hass` fixture non-functional.
+asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py313"
