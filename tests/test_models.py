@@ -74,6 +74,17 @@ def test_flush_interval_minutes_setter_writes_seconds():
     assert cfg.to_flush_payload("DEV")["cleanCycle"] == 5400
 
 
+def test_clean_time_flush_duration_passes_through_unconverted():
+    # The vendor sends cleanTime raw -- no seconds<->minutes conversion.
+    # Pinned so nobody later "fixes" this into a unit conversion it doesn't need.
+    cfg = BowlConfig.from_api({"cleanTime": 25})  # observed live
+    assert cfg.clean_time == 25
+    assert cfg.to_flush_payload("DEV")["cleanTime"] == 25
+
+    cfg.clean_time = 99
+    assert cfg.to_flush_payload("DEV")["cleanTime"] == 99
+
+
 # -- Filter life: filterCanUseTime seconds <-> 30-day "months" ----------
 
 
@@ -101,6 +112,23 @@ def test_maintenance_interval_days_setter_writes_seconds():
     cfg = BowlConfig.from_api({"deviceCanUseTime": 0})
     cfg.maintenance_interval_days = 30
     assert cfg.to_maintenance_payload("DEV")["deviceCanUseTime"] == 30 * 86400
+
+
+def test_clean_warn_time_belongs_to_maintenance_not_filter():
+    # Verbatim from the vendor's decompiled app:
+    #   maintenanceConfig: {devNo, deviceCanUseTime, cleanWarnTime}
+    #   filterConfig:      {devNo, filterCanUseTime, filterCapacity}
+    # cleanWarnTime is a maintenanceConfig field, not a filterConfig one --
+    # the vendor app always hard-codes it to 0 and never shows it on any
+    # screen, but the wire endpoint that accepts it is maintenanceConfig.
+    cfg = BowlConfig.from_api(
+        {"cleanWarnTime": 2592000, "filterCanUseTime": 10512000, "deviceCanUseTime": 0}
+    )
+    maintenance_payload = cfg.to_maintenance_payload("DEV")
+    filter_payload = cfg.to_filter_payload("DEV")
+
+    assert maintenance_payload["cleanWarnTime"] == 2592000
+    assert "cleanWarnTime" not in filter_payload
 
 
 # -- Filter capacity: read `capacity`, write `filterCapacity` -----------
@@ -178,6 +206,47 @@ def test_water_payload_rejects_one_sided_zero():
     cfg2 = BowlConfig.from_api({"dayMinWater": 5000, "dayMaxWater": 0})
     with pytest.raises(ValueError, match="dayMinWater"):
         cfg2.to_water_payload("DEV", units=1)
+
+
+# -- Exact wire key set per payload (vendor app decompile, verbatim) -----
+#
+# Presence-only assertions ("the right key is there") don't catch a field
+# ending up in the WRONG payload if that payload also happens to have the
+# right keys -- which is exactly how cleanWarnTime ended up wrongly emitted
+# by to_filter_payload in an earlier pass. These assert the full key set,
+# so an extra/misplaced key fails even if every expected key is present.
+
+
+def test_to_flush_payload_exact_key_set():
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payload = cfg.to_flush_payload("DEV")
+    assert set(payload) == {"device_id", "cleanCycle", "cleanTime", "fillWashState"}
+
+
+def test_to_sleep_payload_exact_key_set():
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payload = cfg.to_sleep_payload("DEV")
+    assert set(payload) == {"device_id", "sleepStart", "sleepEnd", "sleepState"}
+
+
+def test_to_filter_payload_exact_key_set():
+    # Vendor decompiled app, verbatim: {devNo, filterCanUseTime, filterCapacity}.
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payload = cfg.to_filter_payload("DEV")
+    assert set(payload) == {"device_id", "filterCanUseTime", "filterCapacity"}
+
+
+def test_to_maintenance_payload_exact_key_set():
+    # Vendor decompiled app, verbatim: {devNo, deviceCanUseTime, cleanWarnTime}.
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payload = cfg.to_maintenance_payload("DEV")
+    assert set(payload) == {"device_id", "deviceCanUseTime", "cleanWarnTime"}
+
+
+def test_to_water_payload_exact_key_set():
+    cfg = BowlConfig.from_api(fx("device_config.json"))
+    payload = cfg.to_water_payload("DEV", units=1)
+    assert set(payload) == {"device_id", "dayMinWater", "dayMaxWater", "units"}
 
 
 # -- deviceType: inverted 9"/7" enum --------------------------------------

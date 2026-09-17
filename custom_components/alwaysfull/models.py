@@ -220,13 +220,13 @@ class BowlConfig:
     sleep_end_minutes: int = 0  # sleepEnd
     sleep_state: int | None = None  # sleepState
 
-    # filterConfig group
+    # filterConfig group -- verbatim from the vendor app: {devNo, filterCanUseTime, filterCapacity}
     filter_can_use_time_seconds: int = 0  # filterCanUseTime
     filter_capacity_raw: int | None = None  # capacity (read) / filterCapacity (write)
-    clean_warn_time_seconds: int | None = None  # cleanWarnTime
 
-    # maintenanceConfig group
+    # maintenanceConfig group -- verbatim from the vendor app: {devNo, deviceCanUseTime, cleanWarnTime}
     device_can_use_time_seconds: int = 0  # deviceCanUseTime
+    clean_warn_time_seconds: int | None = None  # cleanWarnTime
 
     # waterConfig group (units is echoed in from device state, not stored here)
     day_min_water: int = 0  # dayMinWater
@@ -360,20 +360,32 @@ class BowlConfig:
         """Whole-object payload for `set_filter_config` (`/app/device/filterConfig`).
 
         Sends `filterCapacity`, never `capacity` -- the single easiest thing
-        to get wrong in this whole integration.
+        to get wrong in this whole integration. Verbatim from the vendor's
+        decompiled app, this endpoint's body is exactly
+        `{devNo, filterCanUseTime, filterCapacity}` -- `cleanWarnTime` is
+        NOT part of it (that belongs to `maintenanceConfig` -- see
+        `to_maintenance_payload`).
         """
         return {
             "device_id": device_id,
             "filterCanUseTime": self.filter_can_use_time_seconds,
             "filterCapacity": self.filter_capacity_raw,
-            "cleanWarnTime": self.clean_warn_time_seconds,
         }
 
     def to_maintenance_payload(self, device_id: str) -> dict[str, Any]:
-        """Whole-object payload for `set_maintenance_config` (`/app/device/maintenanceConfig`)."""
+        """Whole-object payload for `set_maintenance_config` (`/app/device/maintenanceConfig`).
+
+        Verbatim from the vendor's decompiled app, this endpoint's body is
+        exactly `{devNo, deviceCanUseTime, cleanWarnTime}`. The vendor's own
+        app always hard-codes `cleanWarnTime: 0` and never exposes it on any
+        screen, but the read path here still converts it seconds<->30-day
+        months, so a non-zero warn lead time can be set meaningfully -- a
+        small feature the vendor app itself doesn't have.
+        """
         return {
             "device_id": device_id,
             "deviceCanUseTime": self.device_can_use_time_seconds,
+            "cleanWarnTime": self.clean_warn_time_seconds,
         }
 
     def to_water_payload(self, device_id: str, units: int) -> dict[str, Any]:
