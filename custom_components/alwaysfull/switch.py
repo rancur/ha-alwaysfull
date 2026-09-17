@@ -71,6 +71,25 @@ ON = 1
 OFF = 0
 
 
+def _int_flag(value: int | None) -> bool | None:
+    """Return an int flag as a bool, or `None` when the vendor did not send it.
+
+    `None`, never `False`, and the difference is what the user is invited
+    to do about it. A switch reading "off" says the setting is off, so the
+    obvious next action is to turn it on -- against a bowl whose real
+    setting nobody here knows, which may switch it off. "Unknown" says so
+    and asks for nothing.
+
+    A short `/app/device/config` is not hypothetical: the coordinator's
+    `or {}` already anticipates `data: null`, and `_reject_partial_group`
+    exists precisely to refuse WRITING a config group assembled from one.
+    This is the same fault facing the other way.
+    """
+    if value is None:
+        return None
+    return value == ON
+
+
 @dataclass(frozen=True, kw_only=True)
 class AlwaysFullSwitchEntityDescription(SwitchEntityDescription):
     """Describes one per-bowl switch."""
@@ -104,21 +123,21 @@ SWITCHES: tuple[AlwaysFullSwitchEntityDescription, ...] = (
     AlwaysFullSwitchEntityDescription(
         key="flush_after_filling",
         translation_key="flush_after_filling",
-        value_fn=lambda config: config.fill_wash_state == ON,
+        value_fn=lambda config: _int_flag(config.fill_wash_state),
         set_fn=_set_fill_wash_state,
         group=FLUSH_GROUP,
     ),
     AlwaysFullSwitchEntityDescription(
         key="sleep_mode",
         translation_key="sleep_mode",
-        value_fn=lambda config: config.sleep_state == ON,
+        value_fn=lambda config: _int_flag(config.sleep_state),
         set_fn=_set_sleep_state,
         group=SLEEP_GROUP,
     ),
     AlwaysFullSwitchEntityDescription(
         key="drinking_log",
         translation_key="drinking_log",
-        value_fn=lambda config: config.log_state == ON,
+        value_fn=lambda config: _int_flag(config.log_state),
         set_fn=_set_log_state,
         group=LOG_GROUP,
     ),
@@ -126,8 +145,13 @@ SWITCHES: tuple[AlwaysFullSwitchEntityDescription, ...] = (
 
 
 def _flag(field: str) -> Callable[[dict[str, Any]], bool | None]:
-    """Return a reader for one account-level int flag."""
-    return lambda config: config.get(field) == ON
+    """Return a reader for one account-level int flag.
+
+    Absent means unknown, not off -- see `_int_flag`, and see
+    `_alert_enabled` below, which has always answered `None` for an alert
+    type it could not find in either array.
+    """
+    return lambda config: _int_flag(config.get(field))
 
 
 def _set_flag(field: str) -> Callable[[dict[str, Any], bool], None]:

@@ -20,6 +20,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
     Platform,
 )
 from homeassistant.core import HomeAssistant
@@ -279,6 +280,66 @@ async def test_notification_switches_are_unavailable_until_the_config_is_known(
     with pytest.raises(HomeAssistantError, match="not been read"):
         await switch.async_turn_on()
     assert mock_api.writes == []
+
+
+@pytest.mark.parametrize(
+    ("field", "key"),
+    [
+        ("fillWashState", "flush_after_filling"),
+        ("sleepState", "sleep_mode"),
+        ("logState", "drinking_log"),
+    ],
+)
+async def test_a_bowl_switch_the_config_never_carried_reads_unknown(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, field: str, key: str
+) -> None:
+    """A field the config did not carry is UNKNOWN, never "off".
+
+    `/app/device/config` answering short is a state this integration
+    already anticipates everywhere else -- `_reject_partial_group` refuses
+    to WRITE a group built from one. Reading it as off is the same fault
+    facing the other way: it invites the user to toggle a setting whose
+    real value nobody knows, and the toggle then writes the opposite of
+    whatever the bowl is actually doing.
+
+    Their sibling `_alert_enabled` has always returned `None` for a type
+    it cannot find. These three now agree with it.
+    """
+    config = load_fixture_data("device_config")
+    assert field in config, "the fixture must carry the field this test removes"
+    del config[field]
+    mock_api.device_config_override = config
+
+    await setup_platform(hass, Platform.SWITCH)
+
+    assert hass.states.get(bowl_switch(hass, key)).state == STATE_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("field", "key"),
+    [("isTextNotify", "text_alerts"), ("isEmailNotify", "email_alerts")],
+)
+async def test_an_account_switch_the_config_never_carried_reads_unknown(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, field: str, key: str
+) -> None:
+    """The same for the two account-level flags.
+
+    The entity stays AVAILABLE -- the notification config was read, it
+    simply did not carry this field -- so "unknown" is the only honest
+    state left. Unavailable would be a lie about the fetch, and off would
+    be a lie about the setting.
+    """
+    entry = await setup_platform(hass, Platform.SWITCH)
+    config = load_fixture_data("notify_config")
+    assert field in config, "the fixture must carry the field this test removes"
+    del config[field]
+    entry.runtime_data.notify_config = config
+    entry.runtime_data.async_update_listeners()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(account_switch(hass, key)).state == STATE_UNKNOWN
+    # The alert switches read the arrays, not the flags, and are unmoved.
+    assert hass.states.get(account_switch(hass, "alert_tilted")).state == STATE_OFF
 
 
 async def test_a_refused_notification_save_raises(
