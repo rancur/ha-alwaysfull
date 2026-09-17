@@ -391,3 +391,57 @@ async def test_refresh_after_write_also_requests_a_full_poll(
     await hass.async_block_till_done()
 
     assert mock_api.device_list_calls == before + 1
+
+
+# -- `_notifications_for`, directly ---------------------------------------
+#
+# Its only other coverage is a full two-bowl integration test, which
+# exercises it through four other layers. These call it directly so that a
+# failure names the filter rather than the platform that noticed.
+
+
+def test_notifications_for_keeps_only_this_devices_rows():
+    """Rows naming another bowl are dropped; this bowl's are kept in order."""
+    rows = [
+        {"id": 1, "deviceId": DEVICE_ID, "type": "Tilted"},
+        {"id": 2, "deviceId": SECOND_DEVICE_ID, "type": "Fill_Failed"},
+        {"id": 3, "deviceId": DEVICE_ID, "type": "Hardware_Fault"},
+    ]
+
+    kept = AlwaysFullCoordinator._notifications_for(DEVICE_ID, rows)
+
+    assert [row["id"] for row in kept] == [1, 3]
+
+
+def test_notifications_for_keeps_a_row_with_no_device_id():
+    """An absent `deviceId` is not evidence the row belongs elsewhere.
+
+    We asked this endpoint for this device. Discarding an unlabelled row
+    would lose a real alert; keeping it costs nothing on a per-device feed.
+    """
+    rows = [{"id": 1, "deviceId": None}, {"id": 2}, {"id": 3, "deviceId": SECOND_DEVICE_ID}]
+
+    kept = AlwaysFullCoordinator._notifications_for(DEVICE_ID, rows)
+
+    assert [row["id"] for row in kept] == [1, 2]
+
+
+def test_notifications_for_keeps_a_malformed_row():
+    """A non-dict row cannot be tested for a device id, so it survives.
+
+    Dropping it here would hide it from the entity layer, which is where
+    the decision about malformed JSON belongs -- and where it is already
+    made.
+    """
+    rows = ["not a row", {"id": 1, "deviceId": SECOND_DEVICE_ID}]
+
+    kept = AlwaysFullCoordinator._notifications_for(DEVICE_ID, rows)
+
+    assert kept == ["not a row"]
+
+
+def test_notifications_for_drops_everything_when_none_match():
+    """The empty result is a real result, not a fall-through to the input."""
+    rows = [{"id": 1, "deviceId": SECOND_DEVICE_ID}, {"id": 2, "deviceId": SECOND_DEVICE_ID}]
+
+    assert AlwaysFullCoordinator._notifications_for(DEVICE_ID, rows) == []

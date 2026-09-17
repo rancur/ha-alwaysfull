@@ -254,6 +254,12 @@ class AlwaysFullAlertEvent(AlwaysFullEntity, EventEntity):
         # in the same sixty seconds.
         #
         # A poll carrying ONE event behaves identically either way, so only
-        # `test_several_new_rows_each_fire_once_oldest_first` fails if this
-        # is removed. That one test is the whole guard.
+        # a test that puts SEVERAL new rows in one poll can see this at
+        # all. Three now do, and deleting this line fails all three:
+        # `test_several_new_rows_each_fire_once_oldest_first`,
+        # `test_an_older_alert_in_a_batch_still_reaches_the_state_machine`
+        # and `test_two_alerts_in_the_same_second_fire_in_numeric_id_order`.
+        # (Verified by removing the line and running the suite, not by
+        # reading the tests -- an earlier version of this comment named one
+        # test and was out of date within a day.)
         self.async_write_ha_state()
