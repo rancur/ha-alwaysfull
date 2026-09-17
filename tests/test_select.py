@@ -17,7 +17,7 @@ from homeassistant.components.select import (
 from homeassistant.components.select import (
     DOMAIN as SELECT_DOMAIN,
 )
-from homeassistant.const import ATTR_ENTITY_ID, Platform
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -32,6 +32,7 @@ from .conftest import (
     DEVICE_ID,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
+    device_row,
     only_write,
     setup_platform,
 )
@@ -142,4 +143,29 @@ async def test_a_refused_select_write_raises(
     with pytest.raises(HomeAssistantError, match="Device offline"):
         await _select(hass, f"{WALL}units", "fl_oz")
 
+    assert hass.states.get(f"{WALL}units").state == "ml"
+
+
+async def test_an_unrecognised_bowl_size_reads_unknown_rather_than_nine_inch(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A `deviceType` outside the enum is not evidence of a 9-inch bowl.
+
+    `models.device_type_to_bowl_size_inches` falls back to 9" so that an
+    unrecognised value cannot raise inside a coordinator update, which is
+    right for a reading nobody acts on -- the device page's model string.
+    It is not right HERE. This entity's own docstring promises `None` for
+    a value outside the enum, and the reason is that the user acts on what
+    it says: a select claiming "9 inch" for a bowl whose size the vendor
+    described in a way we do not understand invites them to "correct" it
+    to 7 inch, which WRITES a size to the bowl.
+
+    `unknown` says what is true. The two real options are still there to
+    pick from, so nothing is taken away.
+    """
+    mock_api.device_rows_override = [device_row(deviceType=99)]
+    await setup_platform(hass, Platform.SELECT)
+
+    assert hass.states.get(f"{WALL}bowl_size").state == STATE_UNKNOWN
+    # The units select on the same bowl is unaffected.
     assert hass.states.get(f"{WALL}units").state == "ml"

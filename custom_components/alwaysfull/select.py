@@ -63,6 +63,15 @@ BOWL_SIZE_OPTIONS: dict[str, int] = {
     "7_inch": BOWL_SIZE_7_INCH,
 }
 
+# The same two options against the vendor's own wire values, for READING a
+# device row back. Derived from `BOWL_SIZE_OPTIONS` through the one
+# conversion, never written out by hand: a second hand-written table is
+# how an inverted enum gets inverted twice.
+BOWL_SIZE_DEVICE_TYPES: dict[str, int] = {
+    option: bowl_size_inches_to_device_type(inches)
+    for option, inches in BOWL_SIZE_OPTIONS.items()
+}
+
 
 def _reverse(mapping: dict[str, int]) -> dict[int, str]:
     """Return `mapping` inverted, for reading a wire value back to an option."""
@@ -83,8 +92,20 @@ def _current_units(bowl: BowlData) -> str | None:
 
 
 def _current_bowl_size(bowl: BowlData) -> str | None:
-    """Return the bowl's size as an option, decoded from the inverted enum."""
-    return _reverse(BOWL_SIZE_OPTIONS).get(bowl.state.bowl_size_inches)
+    """Return the bowl's size as an option, decoded from the inverted enum.
+
+    Decoded from the RAW `deviceType`, NOT from `state.bowl_size_inches`.
+    That property falls back to 9" for any value outside the enum, which is
+    right where an unrecognised value must not raise mid-poll and nobody
+    acts on the answer -- the device page's model string. Reading it here
+    would put that guess in front of the user as a setting they can
+    "correct", and correcting it WRITES a size to the bowl.
+
+    So: a `deviceType` this integration does not understand reports
+    nothing, exactly as `_current_units` does for a `units` it does not
+    understand. Both real options stay selectable, so nothing is lost.
+    """
+    return _reverse(BOWL_SIZE_DEVICE_TYPES).get(bowl.state.device_type_raw)
 
 
 def _write_units(client: AlwaysFullClient, device_id: str, option: str) -> Awaitable[Any]:

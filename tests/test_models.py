@@ -483,3 +483,64 @@ def test_water_unit_maps_the_vendor_enum(units: int, expected: str) -> None:
     """The bowl's `units` enum decides the unit, in ONE place."""
     assert water_unit(units) == expected
     assert BowlState(units=units).water_unit == expected
+
+
+@pytest.mark.parametrize(
+    ("device_type", "expected"),
+    [
+        (0, 9),
+        (1, 7),
+        # Everything else falls back to 9", the vendor's own `deviceType`
+        # 0. Deliberate, and now pinned: an unrecognised device type
+        # arriving mid-poll must not raise inside a coordinator update,
+        # where it would break every entity on the bowl. The fallback is
+        # only reached by a value the vendor has never sent.
+        (2, 9),
+        (-1, 9),
+        (99, 9),
+    ],
+)
+def test_an_unrecognised_device_type_falls_back_to_the_nine_inch_bowl(
+    device_type: int, expected: int
+) -> None:
+    """The inverted enum decodes 0/1, and never raises on anything else."""
+    assert device_type_to_bowl_size_inches(device_type) == expected
+    assert BowlState(device_type_raw=device_type).bowl_size_inches == expected
+    assert BowlConfig(device_type_raw=device_type).bowl_size_inches == expected
+
+
+@pytest.mark.parametrize(
+    ("inches", "expected"),
+    [
+        (9, 0),
+        (7, 1),
+        # The write direction falls back the same way, and is reachable
+        # only from a caller that invented a size: the select platform
+        # offers exactly two options.
+        (12, 0),
+        (0, 0),
+    ],
+)
+def test_an_unrecognised_bowl_size_writes_the_nine_inch_enum(inches: int, expected: int) -> None:
+    """Inches -> the vendor's INVERTED enum, with the same 9" fallback."""
+    assert bowl_size_inches_to_device_type(inches) == expected
+
+
+def test_the_bowl_size_helpers_round_trip_both_real_bowls() -> None:
+    """Both directions agree for the two sizes that exist.
+
+    The fallbacks above are each other's blind spot: "always return 9" and
+    "always return 0" satisfy one of those tests apiece.
+    """
+    for inches in (9, 7):
+        assert device_type_to_bowl_size_inches(bowl_size_inches_to_device_type(inches)) == inches
+
+
+def test_a_config_that_omits_the_device_type_reports_no_bowl_size() -> None:
+    """`None` is NOT the fallback case: the config simply did not say.
+
+    `BowlConfig.device_type_raw` defaults to `None` for a config object
+    that omitted `deviceType`, and that is distinct from an unrecognised
+    value -- nothing was claimed, so nothing is reported.
+    """
+    assert BowlConfig.from_api({}).bowl_size_inches is None
