@@ -81,7 +81,7 @@ rules:
   test-coverage:
     status: done
     comment: |
-      373 tests, 140 snapshots, 97% statement coverage of
+      376 tests, 140 snapshots, 97% statement coverage of
       custom_components/alwaysfull, as measured by
       `pytest -q --cov=custom_components.alwaysfull`. The Silver threshold
       is 95%.

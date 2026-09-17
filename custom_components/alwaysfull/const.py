@@ -21,6 +21,18 @@ MAX_SCAN_INTERVAL = 600
 # so polling it every cycle is pure waste against a rate-limited cloud API.
 NOTIFY_CONFIG_EVERY_N_POLLS = 10
 
+# How often the "the account returned no bowls" warning repeats while the
+# condition persists. It always fires on the transition to zero; this is what
+# governs the reminders after that.
+#
+# Not every poll: at the default sixty-second interval that is 1,440 identical
+# lines a day, and a warning nobody can scroll past is a warning nobody reads.
+# Not once-only either: a person who restarts Home Assistant an hour after the
+# transition would find a silent log describing an integration with no
+# entities, which is the exact situation this line exists to explain. Ten
+# polls is ten minutes at the default interval and forty at the maximum.
+EMPTY_DEVICE_LIST_EVERY_N_POLLS = 10
+
 CODE_OK = "200"
 
 # The session token was rejected. The credentials may still be fine, so this

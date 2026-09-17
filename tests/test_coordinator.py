@@ -13,7 +13,11 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.alwaysfull.const import DOMAIN, NOTIFY_CONFIG_EVERY_N_POLLS
+from custom_components.alwaysfull.const import (
+    DOMAIN,
+    EMPTY_DEVICE_LIST_EVERY_N_POLLS,
+    NOTIFY_CONFIG_EVERY_N_POLLS,
+)
 from custom_components.alwaysfull.coordinator import (
     AlwaysFullCoordinator,
     scan_interval_seconds,
@@ -39,11 +43,17 @@ from .conftest import (
 )
 
 
-async def _setup(hass: HomeAssistant) -> AlwaysFullCoordinator:
-    """Load an entry and hand back its coordinator."""
+async def _setup(hass: HomeAssistant, token: str = "T") -> AlwaysFullCoordinator:
+    """Load an entry and hand back its coordinator.
+
+    `token` is a parameter so a test that asserts a secret never reaches the
+    log can use a value long and distinctive enough for the assertion to
+    mean something. The default "T" is one character, and "this string is
+    absent" is a claim no one-character needle can support.
+    """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"email": "user@example.com", "password": "pw", "token": "T"},
+        data={"email": "user@example.com", "password": "pw", "token": token},
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -51,6 +61,25 @@ async def _setup(hass: HomeAssistant) -> AlwaysFullCoordinator:
     assert entry.state is ConfigEntryState.LOADED
     return entry.runtime_data
 
+
+# Long and distinctive on purpose -- see `_setup`.
+SECRET_TOKEN = "TOKEN-THAT-MUST-NEVER-BE-LOGGED"
+
+
+def _our_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Return the warnings THIS integration logged, and nobody else's.
+
+    Filtered by logger name, not just by level: Home Assistant emits its own
+    WARNING for every custom integration it loads ("has not been tested by
+    Home Assistant..."), so a bare level filter counts a line this code did
+    not write and would make a "logged exactly once" assertion pass or fail
+    for reasons that have nothing to do with the integration.
+    """
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == "custom_components.alwaysfull"
+    ]
 
 async def test_one_device_list_call_plus_per_device_reads(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
@@ -481,3 +510,111 @@ async def test_a_failed_post_write_reread_warns_without_naming_the_device(
     assert DEVICE_ID not in caplog.text
     assert SECOND_DEVICE_ID not in caplog.text
     assert device_label(DEVICE_ID) in caplog.text
+
+
+async def test_an_empty_device_list_is_warned_about_without_flooding_the_log(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A poll that finds no bowls must say so, once, in plain words.
+
+    This is the diagnosability half of the empty-device-list fault. An
+    empty list is a SUCCESSFUL poll: the entry reports `loaded`,
+    `last_update_success` is true and, before this, the log said nothing at
+    all -- so from the outside a working integration and one that had
+    silently created no bowl entities were indistinguishable. Dynamic
+    entity addition fixed the user-visible symptom; it did not, on its own,
+    make the next empty list diagnosable.
+
+    WARNING rather than DEBUG because it is always worth reading for an
+    account that is supposed to have a bowl, and because `home-assistant.log`
+    records WARNING without anyone opting in -- which is where a person
+    looks first.
+
+    Deliberately NOT once per poll. At the default sixty-second interval
+    that is 1,440 identical lines a day, which is how a real warning gets
+    scrolled past. It fires on the TRANSITION to zero and then only
+    occasionally while the condition persists.
+    """
+    mock_api.device_rows_override = []
+
+    with caplog.at_level(logging.WARNING, logger="custom_components.alwaysfull"):
+        coordinator = await _setup(hass, token=SECRET_TOKEN)
+        assert coordinator.data == {}
+
+        warnings = _our_warnings(caplog)
+        assert len(warnings) == 1, warnings
+
+        message = warnings[0]
+        # Plain words, and specific about what it means: authentication
+        # worked, the vendor returned nothing, so no bowl entities exist.
+        assert "no bowls" in message
+        # Nothing identifying. There is nothing to identify when the list is
+        # empty, so there is no reason for any of it to be in the line.
+        for secret in ("user@example.com", "user", SECRET_TOKEN, DEVICE_ID, SECOND_DEVICE_ID):
+            assert secret not in message, message
+
+        # A second consecutive empty poll must not repeat it.
+        caplog.clear()
+        await coordinator.async_refresh()
+        assert coordinator.data == {}
+        assert _our_warnings(caplog) == []
+
+        # And a poll that DOES find bowls says nothing at all.
+        caplog.clear()
+        mock_api.device_rows_override = None
+        await coordinator.async_refresh()
+        assert coordinator.data
+        assert _our_warnings(caplog) == []
+
+
+async def test_an_empty_device_list_is_warned_about_again_once_it_recurs(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A list that fills and empties again is a NEW transition, and must warn again.
+
+    Without this, suppressing the repeat could be implemented as "warn once
+    ever", and an account that lost its bowl a week after setup would go
+    back to being silent -- the exact condition this warning exists for.
+    """
+    with caplog.at_level(logging.WARNING, logger="custom_components.alwaysfull"):
+        coordinator = await _setup(hass)
+        assert _our_warnings(caplog) == []
+
+        mock_api.device_rows_override = []
+        await coordinator.async_refresh()
+        assert len(_our_warnings(caplog)) == 1
+
+        caplog.clear()
+        mock_api.device_rows_override = None
+        await coordinator.async_refresh()
+        mock_api.device_rows_override = []
+        await coordinator.async_refresh()
+        assert len(_our_warnings(caplog)) == 1
+
+
+async def test_a_persistent_empty_device_list_is_repeated_but_rarely(
+    hass: HomeAssistant,
+    mock_api: FakeAlwaysFullClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The condition must not go quiet forever once it has been mentioned once.
+
+    A warning that fires on the transition and never again is a warning
+    somebody misses by restarting Home Assistant at the wrong moment. It
+    repeats, just rarely enough that it cannot drown the log.
+    """
+    mock_api.device_rows_override = []
+
+    with caplog.at_level(logging.WARNING, logger="custom_components.alwaysfull"):
+        coordinator = await _setup(hass)
+        caplog.clear()
+
+        # One full repeat cycle of further polls, and exactly one more line.
+        for _ in range(EMPTY_DEVICE_LIST_EVERY_N_POLLS):
+            await coordinator.async_refresh()
+
+        assert len(_our_warnings(caplog)) == 1

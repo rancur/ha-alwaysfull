@@ -382,6 +382,13 @@ works there, look for `custom_components.alwaysfull` lines in your Home
 Assistant log; a rate limit or a timeout is reported as an update failure and
 recovers on its own, while a credentials problem starts a repair flow.
 
+**It loaded, but there are no bowl entities.** The account signed in fine and
+the vendor returned an empty device list, so there was nothing to create
+entities for; look for the `custom_components.alwaysfull` warning saying the
+account returned no bowls. It usually clears itself — as soon as a poll lists
+the bowl, its entities appear on their own, with no reload. If the bowl is
+visible in the Always Full app and this persists, open an issue.
+
 **It keeps asking me to re-authenticate.** The vendor returns the same error
 for a wrong password and for an address with no account, so those two cases
 cannot be told apart. Sign in to the Always Full app with the same credentials

@@ -49,6 +49,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    EMPTY_DEVICE_LIST_EVERY_N_POLLS,
     LOGGER,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
@@ -173,6 +174,9 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         # experiment that settles this.
         self.write_lock = asyncio.Lock()
         self._poll_count = 0
+        # Consecutive polls that found no bowls at all. Drives
+        # `_warn_if_no_devices`; zero means the last poll found some.
+        self._empty_polls = 0
 
     async def _async_update_data(self) -> dict[str, BowlData]:
         """Poll every bowl, mapping vendor failures onto HA's error model."""
@@ -256,7 +260,54 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
             self.notify_config = await self.client.notify_config()
         self._poll_count += 1
 
+        self._warn_if_no_devices(data)
         return data
+
+    def _warn_if_no_devices(self, data: dict[str, BowlData]) -> None:
+        """Say so when a SUCCESSFUL poll found no bowls at all.
+
+        An empty device list is not an error anywhere in this integration's
+        error model, and it should not become one: "this account has no
+        bowls" is a legitimate answer, and raising `UpdateFailed` for it
+        would put a genuinely empty account into a permanent retry loop.
+
+        But the silence around it is what made a real fault
+        undiagnosable. The entry reported `loaded`, `last_update_success`
+        was true, no exception was raised and the log had nothing in it at
+        all -- so from the outside, an integration working normally and one
+        that had created no bowl entities looked exactly alike. Dynamic
+        entity addition means the entities now appear as soon as the vendor
+        lists the bowl; it does not tell anybody why they are missing in the
+        meantime, and that is what this line is for.
+
+        WARNING, not DEBUG: for an account that is supposed to have a bowl
+        this is always worth reading, and WARNING is what reaches a
+        default-level `home-assistant.log` -- the file a person actually
+        opens -- without them having to know to turn debug logging on first.
+
+        Rate-limited rather than per-poll, and re-armed on recovery, so a
+        list that fills and empties again is reported as the new event it
+        is. See `EMPTY_DEVICE_LIST_EVERY_N_POLLS` for why it is neither
+        every poll nor once ever.
+
+        The line carries NOTHING identifying -- no device id, no address, no
+        token. There is nothing to identify when the list is empty, which
+        makes this the easy case of a rule that holds either way.
+        """
+        if data:
+            self._empty_polls = 0
+            return
+
+        self._empty_polls += 1
+        if self._empty_polls % EMPTY_DEVICE_LIST_EVERY_N_POLLS != 1:
+            return
+
+        LOGGER.warning(
+            "Always Full signed in successfully but the account returned no bowls, "
+            "so no bowl entities will be created. If a bowl is set up in the Always "
+            "Full app, this is usually temporary: the next poll that lists it will "
+            "create its entities, with no reload needed."
+        )
 
     @staticmethod
     def _notifications_for(device_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
