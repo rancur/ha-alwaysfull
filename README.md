@@ -63,6 +63,46 @@ an endpoint the app already calls, with the account's own credentials.
 
 ---
 
+## What this can do that the vendor's app can't
+
+Reverse-engineering the protocol turned up several things the Always Full app
+either does not do or does wrong. Each of these is a real difference you get by
+using this integration, and each one is documented in detail — with what was
+measured and what is only inferred — in **[Known vendor
+quirks](docs/VENDOR-API.md)**.
+
+**All ten alert types, as automation triggers, with no subscription.** The
+vendor's per-alert switches gate their own text messages and emails. The
+notification log they read from is written either way, so every alert type
+reaches Home Assistant with all ten of those switches off and nothing paid for.
+
+**Alert history the vendor's app cannot reach.** Their app asks for page one of
+the notification log and nothing else — the page number is a constant in their
+code — so its history is capped at a single page for ever, however long the
+account has existed. The endpoint itself is paginated. Home Assistant also keeps
+its own record: every alert this integration sees becomes a logbook entry and
+stays in your history, long after it has scrolled off the vendor's page.
+
+**Two settings their app never shows you.** Drinking-log recording (`logState`)
+is a working endpoint their app defines and never calls, and the maintenance
+warning lead time is supported by the server but written as `0` on every save by
+their app, with no control for it anywhere in their UI. Both are ordinary
+entities here.
+
+**A no-op save does not shorten your filter life.** Theirs does. The bowl this
+was built against was provisioned with a filter lifetime measured in one length
+of "month", and their app reads and writes it in another, so opening their
+filter screen and pressing save without changing anything quietly takes 1.67
+days off the filter. This
+integration writes the device's original raw value back when the displayed value
+has not changed, so a no-op stays a no-op.
+
+**Filter life that actually moves.** Their app reads a field the server does not
+send, which is why their filter tile is permanently green. This one computes the
+percentage from the two fields the server does send.
+
+---
+
 ## Installation
 
 The integration is **not in the HACS default index**, so it has to be added as
@@ -381,6 +421,22 @@ for the vendor's `filterDueState`, which their API never actually returns
 
 ---
 
+## Known vendor quirks
+
+The Always Full protocol is undocumented, and a fair amount of it is
+surprising: daily totals that depend on the time zone the client declares, a
+filter lifetime their own app shortens on a no-op save, an alert severity field
+that does not indicate severity, a device-id parameter with two different names
+depending on the endpoint, and a drinking log that zero-fills months before the
+bowl existed.
+
+If you are debugging something odd, writing another client, or reverse-
+engineering this device yourself, all of it is written up in
+**[docs/VENDOR-API.md](docs/VENDOR-API.md)** — every claim marked as either
+verified against the live API or inferred, with the measurements that back it.
+
+---
+
 ## Troubleshooting
 
 **Everything is unavailable.** Check the bowl in the vendor's app first. If it
@@ -395,12 +451,15 @@ account returned no bowls. It usually clears itself — as soon as a poll lists
 the bowl, its entities appear on their own, with no reload. If the bowl is
 visible in the Always Full app and this persists, open an issue.
 
-**Using the phone app signs Home Assistant out (and that is fine).** The
-vendor allows **one active session per account**. Signing in anywhere else —
-opening the Always Full app on your phone is the everyday case — invalidates
-the token Home Assistant is using, and the next request it makes comes back
-`token expiration`. This is normal, it is not a sign anything is broken, and
-you do not have to stop using the app.
+**Using the phone app signs Home Assistant out (and that is fine).** Opening
+the Always Full app on your phone signs Home Assistant out of your account, and
+Home Assistant signs itself back in on its next poll or its next setting change.
+You do not have to stop using the app, and there is nothing to do about it.
+
+In detail: the vendor allows **one active session per account**. Signing in
+anywhere else — the phone app is the everyday case — invalidates the token Home
+Assistant is using, and the next request it makes comes back `token expiration`.
+This is normal, it is not a sign anything is broken.
 
 The integration recovers on its own. A poll or a setting change that meets a
 rejected token signs in again, once, and carries on; a change you made goes
@@ -429,6 +488,21 @@ reason.
 **Water today is `unknown`.** Either the server has no row for today yet
 (common early in the morning) or **Drinking log recording** is switched off on
 that bowl.
+
+**Water today looks wrong, and check your time zone first.** The vendor's
+server does not store daily totals against a fixed clock. It works out which day
+each drink belongs to from the time zone the *client* declares, and Home
+Assistant declares the one it is configured with
+(**Settings → System → General → Time zone**). So if Home Assistant's zone is
+wrong, your daily total is wrong: the day is being cut at the wrong hour, and
+drinks are landing on the day before or the day after.
+
+This was measured, not guessed. The same query over the same window returned
+1,028 mL, 1,489 mL and 1,086 mL under three different declared zones — a 45%
+spread. **Nothing reports an error when this happens.** The total looks
+perfectly plausible; it is just not your pet's day. If Home Assistant's zone
+does not match the zone the bowl is standing in, fix it there and the totals
+correct themselves on the next poll.
 
 **The numbers do not match the app.** See *Volume readings* above.
 
@@ -480,7 +554,9 @@ and it was verified by being made to fail first.
 
 ## Contributing
 
-Issues and pull requests are welcome. Two things to know before you open one:
+Issues and pull requests are welcome. Start with
+**[docs/VENDOR-API.md](docs/VENDOR-API.md)**, which is the protocol reference
+this integration is built on. Two more things to know before you open one:
 
 - **No personal data, ever.** `scripts/check_no_pii.py` runs in CI over the
   working tree, the full git history *and* every commit message, and fails the
