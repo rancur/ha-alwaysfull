@@ -11,9 +11,8 @@ from custom_components.alwaysfull.const import DOMAIN
 from custom_components.alwaysfull.entity import AlwaysFullEntity
 from custom_components.alwaysfull.exceptions import AlwaysFullRateLimit
 
-from .conftest import FakeAlwaysFullClient
+from .conftest import DEVICE_ID, FakeAlwaysFullClient
 
-DEVICE_ID = "aabbccddeeff"
 DESCRIPTION = EntityDescription(key="filter_life")
 
 

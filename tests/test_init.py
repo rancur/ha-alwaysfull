@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -11,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.alwaysfull.const import DOMAIN
 from custom_components.alwaysfull.coordinator import AlwaysFullCoordinator
 
-from .conftest import FakeAlwaysFullClient
+from .conftest import FakeAlwaysFullClient, zone_unlike_host
 
 
 async def test_setup_and_unload(hass: HomeAssistant, mock_api: FakeAlwaysFullClient) -> None:
@@ -52,12 +50,14 @@ async def test_client_gets_stored_token_and_ha_time_zone(
     a container running `TZ=UTC` under an HA configured for another zone
     would otherwise mis-bucket every drinking-log day.
 
-    Tokyo is chosen because it observes no DST (so the expected value is
-    stable year-round) and is almost certainly not the developer's or the
-    CI runner's own zone -- an assertion that happens to match the host
-    clock would prove nothing.
+    The zone is picked at runtime (see `zone_unlike_host`) as one that is
+    DST-free AND whose offset differs from this host's. Hard-coding one
+    would make the test host-dependent in both directions: vacuous on a
+    runner in that zone, and failing on correct code on a runner that had
+    been compared against.
     """
-    await hass.config.async_set_time_zone("Asia/Tokyo")
+    zone, expected_offset = zone_unlike_host()
+    await hass.config.async_set_time_zone(zone)
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"email": "user@example.com", "password": "pw", "token": "STORED"},
@@ -67,8 +67,6 @@ async def test_client_gets_stored_token_and_ha_time_zone(
     await hass.async_block_till_done()
 
     assert mock_api.token == "STORED"
-    assert mock_api.constructed_tz_offset_hours == 9
-    # And it really is HA's zone, not the machine's.
-    assert mock_api.constructed_tz_offset_hours != int(
-        datetime.now().astimezone().utcoffset().total_seconds() / 3600
-    )
+    # A fixed, known value for the chosen zone -- which by construction is
+    # NOT this host's offset, so an OS-clock implementation cannot produce it.
+    assert mock_api.constructed_tz_offset_hours == expected_offset

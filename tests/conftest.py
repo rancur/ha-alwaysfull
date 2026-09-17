@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Generator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -28,6 +29,49 @@ import pytest
 from custom_components.alwaysfull.exceptions import AlwaysFullAuthError
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+# The two bowls in `device_list_multi.json`. Both ids are synthetic.
+DEVICE_ID = "aabbccddeeff"
+SECOND_DEVICE_ID = "001122334455"
+
+# The day-boundary test freezes time here. Under freezegun the NAIVE clock
+# (`datetime.now()` with no tz) reads the frozen UTC wall time whatever the
+# host's TZ is -- verified, not assumed -- so both the "reads the OS clock"
+# and "reads UTC" mistakes produce FROZEN_UTC_DATE. Asserting a zone whose
+# local date differs from that is therefore host-independent on its own:
+# 18:00 UTC on the 16th is already 03:00 on the 17th in Tokyo.
+FROZEN_INSTANT = "2026-09-16T18:00:00+00:00"
+FROZEN_ZONE = "Asia/Tokyo"
+FROZEN_LOCAL_DATE = "2026-09-17"
+FROZEN_UTC_DATE = "2026-09-16"
+
+# DST-free zones, so each offset is a year-round constant.
+_ZONE_CANDIDATES = (("Asia/Tokyo", 9), ("Pacific/Honolulu", -10))
+
+
+def zone_unlike_host() -> tuple[str, int]:
+    """Return a `(zone, utc_offset_hours)` pair whose offset differs from this host's.
+
+    Used by the tests that run on the REAL clock, where the host's zone can
+    leak into the result. Hard-coding a zone makes those tests
+    host-dependent in both directions: on a runner that happens to sit at
+    UTC+9, asserting "the offset is 9" passes for an implementation reading
+    the OS clock (a false green), while asserting "the offset is not the
+    host's" fails on entirely correct code (worse). Choosing at runtime
+    keeps the asserted value a fixed known constant while guaranteeing it
+    cannot have come from the host clock. The host can match at most one
+    candidate, so this always finds one.
+    """
+    host_utc_offset = datetime.now().astimezone().utcoffset()
+    assert host_utc_offset is not None
+    host_offset = int(host_utc_offset.total_seconds() / 3600)
+
+    for zone, offset in _ZONE_CANDIDATES:
+        if offset != host_offset:
+            return zone, offset
+
+    msg = f"No candidate zone differs from the host offset {host_offset}"
+    raise RuntimeError(msg)
 
 
 def load_fixture_data(name: str) -> Any:
@@ -86,6 +130,10 @@ class FakeAlwaysFullClient:
         # Injectable response, so a test can prove a re-read really re-read.
         self.device_config_override: dict[str, Any] | None = None
 
+        # Per-device drinking totals, so a multi-device test can prove each
+        # bowl got ITS OWN total rather than the first bowl's.
+        self.drinking_totals: dict[str, int] = {DEVICE_ID: 903, SECOND_DEVICE_ID: 250}
+
     def fail_device_list(self, error: Exception, times: int | None = None) -> None:
         """Make `device_list()` raise `error`, for `times` calls (None = forever)."""
         self.device_list_error = error
@@ -103,20 +151,34 @@ class FakeAlwaysFullClient:
         return self.token
 
     async def device_list(self) -> Any:
-        """Return the paginated device-list envelope from the fixtures."""
+        """Return the paginated device-list envelope from the fixtures.
+
+        Serves `device_list_multi.json`, NOT the single-row live capture:
+        with one row, every assertion about the per-device loop passes
+        identically for an implementation that only ever handles `rows[0]`,
+        so a user's second bowl could silently produce no entities at all
+        with the suite still green. The multi fixture keeps the captured row
+        verbatim and adds a second synthetic bowl plus a half-provisioned
+        row with a null `deviceId`. `device_list.json` stays pristine for
+        the transport tests.
+        """
         self.device_list_calls += 1
         if self.device_list_error is not None and self.device_list_error_remaining != 0:
             if self.device_list_error_remaining is not None:
                 self.device_list_error_remaining -= 1
             raise self.device_list_error
-        return copy.deepcopy(load_fixture_data("device_list"))
+        return copy.deepcopy(load_fixture_data("device_list_multi"))
 
     async def device_config(self, device_id: str) -> Any:
-        """Return the device-config object from the fixtures."""
+        """Return the device-config object for `device_id` from the fixtures.
+
+        `devNo` is echoed back as the requested id so a test can prove each
+        bowl was given ITS OWN config, not another bowl's.
+        """
         self.device_config_calls.append(device_id)
-        if self.device_config_override is not None:
-            return copy.deepcopy(self.device_config_override)
-        return copy.deepcopy(load_fixture_data("device_config"))
+        config = copy.deepcopy(self.device_config_override or load_fixture_data("device_config"))
+        config["devNo"] = device_id
+        return config
 
     async def drinking_log(self, device_id: str, units: int, start: str, end: str) -> Any:
         """Return one row for the requested day, plus one unrelated day.
@@ -129,7 +191,7 @@ class FakeAlwaysFullClient:
         self.drinking_log_calls.append((device_id, units, start, end))
         return [
             {"drinkingDate": "1999-12-31", "totalCapacity": 4242},
-            {"drinkingDate": start, "totalCapacity": 903},
+            {"drinkingDate": start, "totalCapacity": self.drinking_totals.get(device_id, 0)},
         ]
 
     async def notify_log(self, device_id: str, page_size: int = 20) -> Any:

@@ -12,16 +12,27 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.alwaysfull.const import DOMAIN, NOTIFY_CONFIG_EVERY_N_POLLS
-from custom_components.alwaysfull.coordinator import AlwaysFullCoordinator
+from custom_components.alwaysfull.coordinator import (
+    AlwaysFullCoordinator,
+    scan_interval_seconds,
+)
 from custom_components.alwaysfull.exceptions import (
     AlwaysFullAuthError,
     AlwaysFullError,
     AlwaysFullRateLimit,
 )
 
-from .conftest import FakeAlwaysFullClient, load_fixture_data
-
-DEVICE_ID = "aabbccddeeff"
+from .conftest import (
+    DEVICE_ID,
+    FROZEN_INSTANT,
+    FROZEN_LOCAL_DATE,
+    FROZEN_UTC_DATE,
+    FROZEN_ZONE,
+    SECOND_DEVICE_ID,
+    FakeAlwaysFullClient,
+    load_fixture_data,
+    zone_unlike_host,
+)
 
 
 async def _setup(hass: HomeAssistant) -> AlwaysFullCoordinator:
@@ -44,8 +55,6 @@ async def test_one_device_list_call_plus_per_device_reads(
     coordinator = await _setup(hass)
 
     assert mock_api.device_list_calls == 1
-    assert mock_api.device_config_calls == [DEVICE_ID]
-    assert mock_api.notify_log_calls == [DEVICE_ID]
 
     bowl = coordinator.data[DEVICE_ID]
     assert bowl.state.device_name == "Test Bowl"
@@ -56,24 +65,73 @@ async def test_one_device_list_call_plus_per_device_reads(
     assert len(bowl.notifications) == 13
 
 
+async def test_every_device_in_the_list_is_polled(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A second bowl must not be silently dropped.
+
+    With a single-device fixture this assertion would hold just as well for
+    an implementation that only ever processed `rows[0]`, and a two-bowl
+    household would get no entities for the second bowl with the suite
+    still green.
+    """
+    coordinator = await _setup(hass)
+
+    assert mock_api.device_config_calls == [DEVICE_ID, SECOND_DEVICE_ID]
+    assert mock_api.notify_log_calls == [DEVICE_ID, SECOND_DEVICE_ID]
+    assert [call[0] for call in mock_api.drinking_log_calls] == [DEVICE_ID, SECOND_DEVICE_ID]
+    assert set(coordinator.data) == {DEVICE_ID, SECOND_DEVICE_ID}
+
+    second = coordinator.data[SECOND_DEVICE_ID]
+    assert second.state.device_name == "Second Bowl"
+    # Per-device values must come from THAT device's row/reads, never the
+    # first bowl's: size, units, firmware and today's water all differ.
+    assert second.state.bowl_size_inches == 7
+    assert second.state.units == 2
+    assert second.firmware_version == "3.6.1"
+    assert second.water_today == 250
+    assert second.config.device_id == SECOND_DEVICE_ID
+    # The drinking log is requested in each bowl's OWN units.
+    assert [call[1] for call in mock_api.drinking_log_calls] == [1, 2]
+
+
+async def test_device_row_without_an_id_is_skipped(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A half-provisioned row must be skipped, not crash the whole poll.
+
+    The fixture's third row has `deviceId: null`. Keying `data` on it would
+    collide every such row onto one entry, and passing `None` into
+    `device_config()` would fail the update for the healthy bowls too.
+    """
+    coordinator = await _setup(hass)
+
+    assert coordinator.last_update_success is True
+    assert len(coordinator.data) == 2
+    assert None not in coordinator.data
+    assert None not in mock_api.device_config_calls
+
+
 async def test_drinking_log_is_snapped_to_today_in_ha_time_zone(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
 ) -> None:
     """Today's log window is a single local day, in HA's zone, not UTC's.
 
-    Time is frozen at an instant where the answer differs by zone: 18:00
-    UTC on the 16th is still the 16th in UTC and in the Americas, but
-    already the 17th in Tokyo. A hard-coded 2026-09-17 therefore cannot be
-    produced by a UTC-based or OS-clock-based implementation.
+    Time is frozen at an instant whose local date in the Home Assistant
+    zone (the 17th in Tokyo) differs from its UTC date (the 16th). Under
+    freezegun the naive clock reads the frozen UTC wall time on every host,
+    so BOTH the "reads UTC" and "reads the OS clock" implementations produce
+    the 16th and fail here -- on any runner, including one in Tokyo.
     """
-    freezer.move_to("2026-09-16T18:00:00+00:00")
-    await hass.config.async_set_time_zone("Asia/Tokyo")
+    freezer.move_to(FROZEN_INSTANT)
+    await hass.config.async_set_time_zone(FROZEN_ZONE)
     await _setup(hass)
 
+    assert FROZEN_LOCAL_DATE != FROZEN_UTC_DATE
     device_id, units, start, end = mock_api.drinking_log_calls[0]
     assert (device_id, units) == (DEVICE_ID, 1)
-    assert start == "2026-09-17"
-    assert end == "2026-09-17"
+    assert start == FROZEN_LOCAL_DATE
+    assert end == FROZEN_LOCAL_DATE
 
 
 async def test_time_zone_offset_is_resynced_every_poll(
@@ -85,13 +143,14 @@ async def test_time_zone_offset_is_resynced_every_poll(
     the current offset before each poll, the integration would keep signing
     requests with the offset that was correct the day HA last started.
     """
-    await hass.config.async_set_time_zone("Asia/Tokyo")
+    zone, expected_offset = zone_unlike_host()
+    await hass.config.async_set_time_zone(zone)
     coordinator = await _setup(hass)
 
     mock_api.tz_offset_hours = 999
     await coordinator.async_refresh()
 
-    assert mock_api.tz_offset_hours == 9
+    assert mock_api.tz_offset_hours == expected_offset
 
 
 async def test_notify_config_polled_only_once_every_n_polls(
@@ -177,10 +236,50 @@ async def test_transport_errors_map_to_update_failed(
     assert isinstance(coordinator.last_exception, UpdateFailed)
 
 
-async def test_scan_interval_option_is_clamped(
+@pytest.mark.parametrize(
+    ("options", "data_extra", "expected"),
+    [
+        # Nothing configured at all -> the documented default.
+        ({}, {}, 60),
+        # Below the floor / above the ceiling -> clamped to the bounds.
+        ({"scan_interval": 5}, {}, 30),
+        ({"scan_interval": 700}, {}, 600),
+        # Exactly on the bounds, and inside them -> used verbatim. Without
+        # these, "always return DEFAULT_SCAN_INTERVAL" would pass.
+        ({"scan_interval": 30}, {}, 30),
+        ({"scan_interval": 600}, {}, 600),
+        ({"scan_interval": 45}, {}, 45),
+        # Junk that a hand-edited .storage file could contain.
+        ({"scan_interval": "not a number"}, {}, 60),
+        ({"scan_interval": None}, {}, 60),
+        # An interval that only ever reached entry.data (no options flow run).
+        ({}, {"scan_interval": 700}, 600),
+        # Options win over data when both are present.
+        ({"scan_interval": 45}, {"scan_interval": 600}, 45),
+    ],
+)
+def test_scan_interval_is_clamped_into_the_supported_band(
+    options: dict[str, object], data_extra: dict[str, object], expected: int
+) -> None:
+    """Every branch of the clamp, with literal expectations.
+
+    The values asserted are literals, not the constants under test, so
+    moving `DEFAULT_SCAN_INTERVAL` or dropping either bound fails here
+    rather than quietly redefining what "correct" means.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"email": "user@example.com", "password": "pw", "token": "T", **data_extra},
+        options=options,
+    )
+
+    assert scan_interval_seconds(entry) == expected
+
+
+async def test_scan_interval_reaches_the_coordinator_poll_timer(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """An out-of-range interval is clamped, never used verbatim."""
+    """The clamped value is what the coordinator actually polls on."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"email": "user@example.com", "password": "pw", "token": "T"},
@@ -210,8 +309,10 @@ async def test_refresh_after_write_rereads_that_device_config(
 
     await coordinator.async_refresh_after_write(DEVICE_ID)
 
-    assert mock_api.device_config_calls == [DEVICE_ID, DEVICE_ID]
+    # Setup read both bowls; the write re-read ONLY the one written to.
+    assert mock_api.device_config_calls == [DEVICE_ID, SECOND_DEVICE_ID, DEVICE_ID]
     assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == 30
+    assert coordinator.data[SECOND_DEVICE_ID].config.flush_interval_minutes == 60
 
 
 async def test_refresh_after_write_also_requests_a_full_poll(
