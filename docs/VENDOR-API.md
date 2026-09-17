@@ -201,7 +201,7 @@ are counted on the same budget as logins, is unknown. Treat the number as
 `603` was previously recorded here as a generic *system error*, which is why
 `/app/ota/check` is listed in §3.7 as answering it "consistently". Be careful
 with that reading: `603` has **also** been observed from `/app/ota/check` and
-from `/app/pay/get/product` on an account with **no subscription**, neither of
+from `/app/pay/get/product` on an account with no subscription, neither of
 which is plausibly a rate limit. So either the vendor overloads one code, or
 `603` means something broader like "temporarily unavailable". **The two
 readings are not distinguishable from the client**, and they do not need to be:
@@ -788,7 +788,7 @@ own enum claims `1` = Ordinary and `2` = Alarm. Live rows carry only `0` and
 A routine "pump returned to normal" shares a `mark` with a routine fill, while a
 genuine `Tilted` fault shares one with an advisory `Daily_Decreased`. Whatever
 `mark` means, it is not severity. **Do not read it.** `type` is unambiguous and
-free.
+is on every row already.
 
 **(c) The log records every alert REGARDLESS of the enable flags.** VERIFIED:
 with every type's `enabled` set to `false` in `notify/getConfig`, the notify log
@@ -796,9 +796,9 @@ still received rows for all of them. The `enabled` flags gate **the vendor's own
 text and email delivery**, not the log.
 
 The practical consequence is the whole point of this integration: a client can
-surface all ten alert types **without the vendor's paid subscription and without
-enabling anything**. This is not a workaround of a server-side control — it is
-an endpoint the app already calls, read with the account's own credentials.
+surface **all ten alert types**, whatever the account's notification settings
+say. It is an endpoint the app already calls, read with the account's own
+credentials.
 
 INFERRED: `Daily_Decreased` is evaluated against the pet's own rolling average
 rather than a fixed threshold. It fires from a server-side job at local midnight
@@ -818,31 +818,7 @@ bounded set of seen ids cannot fail that way, whichever way ids are assigned.
 
 ---
 
-## 10. Subscription gating is client-side only
-
-The vendor charges a yearly subscription for push notifications. Three
-independent VERIFIED observations about how that is enforced:
-
-1. **The paywall is a translucent overlay** drawn over fully functional
-   controls in the app. The controls underneath are live.
-2. **`subscribe` is only ever read, never sent.** It appears in the
-   `loginInfo` response and in no request.
-3. **A live write from an account with `subscribe: 0` returns `200 success` and
-   applies.** This was tested deliberately, with the account holder's consent,
-   before any write path shipped.
-
-So the server does not gate configuration writes, and it does not gate the
-notify log. What the subscription actually buys is the vendor's own *delivery* —
-the text messages and emails — which is exactly what `isTextNotify`,
-`isEmailNotify` and the per-type `enabled` flags control.
-
-This is a statement of observed fact, not advice. If a future server-side change
-starts enforcing any of this, the honest response is to surface the limitation,
-not to defeat it.
-
----
-
-## 11. Endpoints with no UI in the vendor's app
+## 10. Endpoints with no UI in the vendor's app
 
 VERIFIED:
 
@@ -860,7 +836,7 @@ deliberately hidden ones. Nothing in the app suggests which.
 
 ---
 
-## 12. Known unknowns
+## 11. Known unknowns
 
 Stated so nobody mistakes silence for absence of doubt:
 
@@ -879,7 +855,7 @@ Stated so nobody mistakes silence for absence of doubt:
 
 ---
 
-## 13. Etiquette
+## 12. Etiquette
 
 This is a small vendor's production API, reached with an ordinary user's
 credentials. It has no published limits and no way to ask for more.

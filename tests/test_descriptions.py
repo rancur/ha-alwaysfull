@@ -123,8 +123,8 @@ EXPECTED_CATEGORIES = {
     "offline_time": EntityCategory.DIAGNOSTIC,
     "firmware": EntityCategory.DIAGNOSTIC,
 }
-# The alert event is the paid-subscription feature this integration gives
-# away; burying it under the diagnostics fold would defeat the point.
+# The alert event is the headline feature of this integration; burying it
+# under the diagnostics fold would defeat the point.
 EXPECTED_EVENT_CATEGORIES = {"alert": None}
 EXPECTED_BINARY_CATEGORIES = {
     "online": EntityCategory.DIAGNOSTIC,

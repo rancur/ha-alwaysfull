@@ -15,8 +15,8 @@
 Brings the [Always Full](https://alwaysfull.com/) automatic pet water bowl into
 Home Assistant: how much your pet drank today, whether the bowl is online,
 level, filling and healthy, how much filter life is left, and every setting the
-vendor's app can change. It also turns the bowl's ten alert types into Home
-Assistant triggers — the thing the vendor charges a yearly subscription for.
+vendor's app can change. All ten of the bowl's alert types arrive as Home
+Assistant events, ready to use as automation triggers.
 
 > **Before you install:** this is **cloud-polled and has no local control path
 > whatsoever** — a full scan of all 65,535 ports on the device found zero open
@@ -27,17 +27,20 @@ Assistant triggers — the thing the vendor charges a yearly subscription for.
 
 ---
 
-## The headline: alerts, without the subscription
+## The headline: every alert, as an automation trigger
 
-The Always Full app puts push notifications behind a **US$29.99/year**
-subscription. Without it the bowl can tell you nothing when it tips over, fails
-to fill, or your cat stops drinking.
+The bowl has something to say when it tips over, when it fails to fill, and
+when your cat drinks less than usual. This integration polls the vendor's
+notification log and re-emits each new entry as a Home Assistant `event`
+entity, with the alert type as the event type — so any of those can start an
+automation, light up a dashboard, or page your phone through whichever notifier
+you already use.
 
-The vendor's servers write every one of those alerts into a notification log
-regardless — **including when every alert type is switched off in their app**,
-because those switches gate the vendor's own text and email delivery, not the
-log. This integration polls that log and re-emits each new entry as a Home
-Assistant `event` entity, with the alert type as the event type.
+The vendor's servers write every alert into that log regardless of the account's
+notification settings — **including when every alert type is switched off in
+their app** — because those switches gate the vendor's own text and email
+delivery, not the log. Nothing has to be turned on anywhere for the `event`
+entity to fire.
 
 All ten types come through:
 
@@ -58,8 +61,9 @@ An eleventh value, `unknown`, is reported if the vendor ever sends a type that
 is not in this list. The vendor's own spelling is always available in the
 `raw_type` attribute, so a new type is still matchable the day it appears.
 
-This is not a workaround of anything the vendor enforces server-side. It reads
-an endpoint the app already calls, with the account's own credentials.
+This is the same endpoint the vendor's own app calls, read with your own
+account's credentials — their API, driven from your own home automation
+system.
 
 ---
 
@@ -71,10 +75,10 @@ using this integration, and each one is documented in detail — with what was
 measured and what is only inferred — in **[Known vendor
 quirks](docs/VENDOR-API.md)**.
 
-**All ten alert types, as automation triggers, with no subscription.** The
-vendor's per-alert switches gate their own text messages and emails. The
-notification log they read from is written either way, so every alert type
-reaches Home Assistant with all ten of those switches off and nothing paid for.
+**All ten alert types, as automation triggers.** The vendor's per-alert switches
+gate their own text messages and emails. The notification log they read from is
+written either way, so every alert type reaches Home Assistant even with all ten
+of those switches off.
 
 **Alert history the vendor's app cannot reach.** Their app asks for page one of
 the notification log and nothing else — the page number is a constant in their
@@ -249,7 +253,8 @@ bowl, so two bowls cannot disagree about a single server-side flag.
 | Ten per-alert-type switches (Tilted alerts, Fill failed alerts, …) | switch |
 
 **You do not need any of these switched on for the `event` entity to fire.**
-They control the vendor's own delivery, which is the part behind the paywall.
+They control the vendor's own text messages and emails; the notification log the
+`event` entity reads is written either way.
 
 ---
 
@@ -266,8 +271,8 @@ Replace `water_bowl` with your own bowl's entity id.
 ### 1. Your pet is drinking less than usual
 
 `daily_decreased` is the alert the bowl raises when consumption drops below the
-pet's own rolling average — the one most worth knowing about, and the one the
-vendor charges for.
+pet's own rolling average — quiet, easy to miss in person, and usually the
+first sign that something is wrong.
 
 ```yaml
 alias: "Water bowl: pet drank less than usual"

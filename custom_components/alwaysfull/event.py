@@ -1,9 +1,8 @@
 """Alert event platform for Always Full.
 
-The vendor gates push notifications behind a paid subscription. The same
-alerts are readable for free from `notify/log`, which the coordinator
-already polls, so this entity turns them into Home Assistant automation
-triggers.
+The bowl's ten alert types all land in `notify/log`, which the coordinator
+already polls, so this entity turns each new row into a Home Assistant
+automation trigger.
 
 Three facts drive the whole design, each verified rather than assumed:
 

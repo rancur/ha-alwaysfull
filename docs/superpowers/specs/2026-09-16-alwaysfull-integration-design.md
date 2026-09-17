@@ -8,8 +8,8 @@
 ## Goal
 
 An Always Full pet water bowl owner can uninstall the vendor app and lose nothing.
-Full read and write control, device alerts surfaced as first-class Home Assistant
-events, no vendor subscription required for anything the integration exposes.
+Full read and write control, and every device alert surfaced as a first-class
+Home Assistant event.
 
 Anything less than that is a partial success. A read-only sensor dump would be
 easy and would not meet the goal.
@@ -47,9 +47,9 @@ nothing that was not already public.
 - Firmware modification or OTA interception.
 - Reselling, proxying, or caching vendor data beyond what a single user's own
   Home Assistant needs.
-- Working around the vendor's paid subscription where the server enforces it.
-  If a capability is server-gated we surface the limitation honestly rather
-  than attempting to defeat it.
+- Working around anything the vendor enforces server-side. If a capability is
+  server-gated we surface the limitation honestly rather than attempting to
+  defeat it.
 
 ## Architecture
 
@@ -144,15 +144,14 @@ These come from the contract and each one silently corrupts a write if missed:
 
 ### Alerts
 
-Will's stated priority. The vendor gates push notifications behind a
-US$29.99/yr subscription. `/app/notify/getNotifyLog` is polled, new entries are
-diffed against the previous poll, and each is emitted through an `event` entity
-with the alert type as `event_type` and the vendor payload as attributes. That
-gives automation users a trigger without the vendor's push service.
+The owner's stated priority. `/app/notify/getNotifyLog` is polled, new entries
+are diffed against the previous poll, and each is emitted through an `event`
+entity with the alert type as `event_type` and the vendor payload as
+attributes. That gives automation users a trigger for every alert the bowl
+raises, routed through whichever notifier they already use.
 
-If the notification log itself turns out to be server-gated behind the
-subscription, we say so plainly in the README rather than shipping an entity
-that silently never fires.
+If the notification log itself turns out to be server-gated, we say so plainly
+in the README rather than shipping an entity that silently never fires.
 
 ### Verified platform facts
 
@@ -242,8 +241,7 @@ to mark UNKNOWN. Corrections that matter:
   rows carry `0` and `1`. Severity is derived from `type`, not `mark`.
 - **The notify log is populated even with every alert type disabled.** The
   `enabled` flags gate only the vendor's text/email delivery. Home Assistant
-  therefore gets alerts without the subscription and without turning anything
-  on.
+  therefore gets every alert type however those flags are set.
 - **`msg` embeds the device's MAC address** (`"Bowl <mac> is filling."`). Test
   fixtures must synthesise this string, never copy it.
 - `/app/device/config` returns four raw protocol-framing fields —
@@ -272,8 +270,6 @@ to mark UNKNOWN. Corrections that matter:
 
 ## Open questions
 
-1. Whether the write endpoints are server-gated behind the subscription. The
-   paywall is client-side only (a translucent overlay over live controls), but
-   that is not proof the server does not check. Settled by one write against a
-   non-subscribed account, done with the owner's consent before any write
-   entity ships.
+1. Whether the write endpoints are gated server-side. Nothing read in the app
+   settles that either way. Settled by one live write, done with the owner's
+   consent, before any write entity ships.

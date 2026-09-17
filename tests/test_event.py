@@ -1,8 +1,7 @@
 """Alert event platform.
 
-This is the entity the bowl's owner actually cares about: the vendor gates
-push notifications behind a subscription, and this turns the same alerts
-into free Home Assistant automation triggers.
+This is the entity the bowl's owner actually cares about: it turns each
+alert the bowl raises into a Home Assistant automation trigger.
 
 Three behaviours carry the whole feature, and all three fail SILENTLY if
 they regress -- no exception, no log line, just a user who is either paged

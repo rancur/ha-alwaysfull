@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a public, HACS-installable Home Assistant integration that gives an Always Full pet water bowl owner full read and write control plus typed device alerts, so the vendor app and its US$29.99/yr subscription become unnecessary.
+**Goal:** Ship a public, HACS-installable Home Assistant integration that gives an Always Full pet water bowl owner full read and write control of their bowl plus typed device alerts, all of it native to Home Assistant.
 
 **Architecture:** A dependency-free async aiohttp client (`api.py`) that knows nothing about Home Assistant, wrapped by a `DataUpdateCoordinator` that batches one `device/list` call plus per-device `config`, `drinking/log` and `notify` reads. Entities are declarative `EntityDescription` tables. Alerts become an `EventEntity` deduped on the vendor's row `id`.
 
@@ -455,7 +455,7 @@ Must cover: a new notify row fires exactly one event with the right `event_type`
 
 **Files:** `number.py`, `switch.py`, `select.py`, `time.py`, `button.py` + tests
 
-> **Gate:** before writing this task's code, run one live write against the real bowl with the owner watching, and confirm the server accepts it (`code == "200"` and the value reflects back in `device/config`). The vendor's paywall is client-side only, but that is not proof the server does not gate writes. If writes are server-gated, stop and report rather than shipping broken entities.
+> **Gate:** before writing this task's code, run one live write against the real bowl with the owner watching, and confirm the server accepts it (`code == "200"` and the value reflects back in `device/config`). Nothing read in the app proves the server accepts a write from a client other than their own. If writes are server-gated, stop and report rather than shipping broken entities.
 
 - [ ] **Step 1: Write failing tests** asserting that each write calls the right endpoint with the right **device-id parameter name** and the right unit conversion, and that the coordinator refreshes afterwards.
 
@@ -527,4 +527,4 @@ Fails the build on: any email address that is not `user@example.com`; the owner'
 
 **Type consistency.** `BowlState` / `BowlConfig` / `filter_life_percent` are named identically in Tasks 3, 4, 6 and 8. `async_refresh_after_write` is defined in Task 4 and consumed in Task 8. `ALERT_TYPES` is defined in Task 1 and consumed in Tasks 7 and 8.
 
-**Known risk.** Task 8 is gated on a live write succeeding. If the server enforces the subscription, the write platforms cannot ship and the integration degrades to read-plus-alerts — still enough to replace the app's monitoring, but not its controls. This is called out rather than assumed away.
+**Known risk.** Task 8 is gated on a live write succeeding. If the server refuses writes from anything but the vendor's own app, the write platforms cannot ship and the integration degrades to read-plus-alerts — still enough to replace the app's monitoring, but not its controls. This is called out rather than assumed away.
