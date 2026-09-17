@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
 from syrupy.assertion import SnapshotAssertion
@@ -42,6 +43,12 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 # Synthetic account, never a real one.
 ENTRY_DATA = {"email": "user@example.com", "password": "pw", "token": "T"}
+
+# What the config flow sets the entry's unique id to. The account-level
+# entities key their unique ids on it, so a test entry without one would
+# fall back to the randomly generated entry id and make those unique ids
+# -- and therefore the switch snapshot -- different on every run.
+ENTRY_UNIQUE_ID = ENTRY_DATA["email"]
 
 # The two bowls in `device_list_multi.json`. Both ids are synthetic.
 DEVICE_ID = "aabbccddeeff"
@@ -135,10 +142,23 @@ class FakeAlwaysFullClient:
         self.notify_log_calls: list[str] = []
         self.notify_config_calls = 0
 
+        # Every write this client was asked to make, in order, as
+        # `(method_name, kwargs)`. The kwargs are the EXACT arguments the
+        # platform handed the client -- wire field names and converted
+        # values both -- which is the only level at which a minutes-for-
+        # seconds or `capacity`-for-`filterCapacity` mistake is visible.
+        self.writes: list[tuple[str, dict[str, Any]]] = []
+
         # Injectable failures. `_remaining` of None means "raise forever".
         self.device_list_error: Exception | None = None
         self.device_list_error_remaining: int | None = None
         self.login_error: Exception | None = None
+        self.write_error: Exception | None = None
+
+        # Set by `save_notify_config`, so a saved object is what the next
+        # read returns -- which is what makes a read-modify-write chain
+        # testable end to end rather than one call at a time.
+        self.saved_notify_config: dict[str, Any] | None = None
 
         # Injectable response, so a test can prove a re-read really re-read.
         self.device_config_override: dict[str, Any] | None = None
@@ -244,9 +264,80 @@ class FakeAlwaysFullClient:
         return envelope
 
     async def notify_config(self) -> Any:
-        """Return the account-level notification config from the fixtures."""
+        """Return the account-level notification config.
+
+        A previously saved object wins over the committed fixture, so a
+        platform's read-modify-write really round-trips: a test can toggle a
+        switch and then assert the NEXT read reflects it, which a fake that
+        always served the pristine fixture could never show.
+        """
         self.notify_config_calls += 1
+        if self.saved_notify_config is not None:
+            return copy.deepcopy(self.saved_notify_config)
         return copy.deepcopy(load_fixture_data("notify_config"))
+
+    # -- Writers ------------------------------------------------------------
+    #
+    # Each records the exact call and then raises `write_error` if one is
+    # armed, so a test gets to assert BOTH what a failing write attempted
+    # and that the failure surfaced.
+
+    def _record(self, method: str, payload: dict[str, Any]) -> None:
+        """Record one write, then fail it if a failure is armed."""
+        self.writes.append((method, copy.deepcopy(payload)))
+        if self.write_error is not None:
+            raise self.write_error
+
+    async def save_notify_config(self, config: dict[str, Any]) -> Any:
+        """Record the whole notification object and serve it back on the next read."""
+        self._record("save_notify_config", config)
+        self.saved_notify_config = copy.deepcopy(config)
+        return None
+
+    async def set_flush_config(self, device_id: str, **fields: Any) -> Any:
+        """Record a flush-config write."""
+        self._record("set_flush_config", {"device_id": device_id, **fields})
+        return None
+
+    async def set_sleep_config(self, device_id: str, **fields: Any) -> Any:
+        """Record a sleep-config write."""
+        self._record("set_sleep_config", {"device_id": device_id, **fields})
+        return None
+
+    async def set_filter_config(self, device_id: str, **fields: Any) -> Any:
+        """Record a filter-config write."""
+        self._record("set_filter_config", {"device_id": device_id, **fields})
+        return None
+
+    async def set_maintenance_config(self, device_id: str, **fields: Any) -> Any:
+        """Record a maintenance-config write."""
+        self._record("set_maintenance_config", {"device_id": device_id, **fields})
+        return None
+
+    async def set_water_config(self, device_id: str, **fields: Any) -> Any:
+        """Record a water-config write."""
+        self._record("set_water_config", {"device_id": device_id, **fields})
+        return None
+
+    async def set_log_config(self, device_id: str, **fields: Any) -> Any:
+        """Record a drinking-log-config write."""
+        self._record("set_log_config", {"device_id": device_id, **fields})
+        return None
+
+    async def set_units(self, device_id: str, units: int) -> Any:
+        """Record a units write."""
+        self._record("set_units", {"device_id": device_id, "units": units})
+        return None
+
+    async def set_device_type(self, device_id: str, device_type: int) -> Any:
+        """Record a bowl-size write."""
+        self._record("set_device_type", {"device_id": device_id, "device_type": device_type})
+        return None
+
+    async def reset_filter(self, device_id: str) -> Any:
+        """Record a filter-life reset."""
+        self._record("reset_filter", {"device_id": device_id})
+        return None
 
 
 @pytest.fixture
@@ -334,6 +425,34 @@ def bowl_data(**overrides: Any) -> BowlData:
     )
 
 
+def only_write(client: FakeAlwaysFullClient, method: str) -> dict[str, Any]:
+    """Return the payload of the ONE `method` call the client received.
+
+    Asserting there is exactly one is the point: a platform that wrote
+    twice -- say a partial followed by a whole object, or the same value
+    once per bowl -- would satisfy "the last call looked right".
+    """
+    payloads = [payload for name, payload in client.writes if name == method]
+    assert len(payloads) == 1, f"expected exactly one {method} call, got {len(payloads)}"
+    return payloads[0]
+
+
+def entity_id_for(hass: HomeAssistant, domain: str, unique_id: str) -> str:
+    """Return the entity id Home Assistant gave the entity with `unique_id`.
+
+    An entity id is derived from the entity's ENGLISH NAME, so spelling one
+    out in a test couples that test to wording which is allowed to change
+    -- and worse, a renamed entity makes the test fail by referring to
+    nothing at all, which reads like a broken platform. Resolving through
+    the registry keys the test to the entity's identity instead. The
+    literal ids stay pinned, in the snapshots.
+    """
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(domain, DOMAIN, unique_id)
+    assert entity_id is not None, f"no {domain} entity registered for {unique_id!r}"
+    return entity_id
+
+
 async def setup_platform(
     hass: HomeAssistant, platform: Platform, **entry_kwargs: Any
 ) -> MockConfigEntry:
@@ -343,6 +462,7 @@ async def setup_platform(
     each platform's test to its own platform means a snapshot diff names
     the file that caused it.
     """
+    entry_kwargs.setdefault("unique_id", ENTRY_UNIQUE_ID)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, **entry_kwargs)
     entry.add_to_hass(hass)
     with patch("custom_components.alwaysfull.PLATFORMS", [platform]):

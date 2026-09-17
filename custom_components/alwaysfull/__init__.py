@@ -15,8 +15,19 @@ if TYPE_CHECKING:
 
     from .coordinator import AlwaysFullConfigEntry
 
-# Read platforms. The write platforms are added by a later task.
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
+# Read platforms (`PARALLEL_UPDATES = 0`) and write platforms
+# (`PARALLEL_UPDATES = 1`), in one list because Home Assistant forwards
+# them together.
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.EVENT,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TIME,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AlwaysFullConfigEntry) -> bool:

@@ -30,8 +30,18 @@ from homeassistant.components.sensor.const import (
 )
 from homeassistant.const import EntityCategory, UnitOfVolume
 
-from custom_components.alwaysfull import binary_sensor, event, sensor
+from custom_components.alwaysfull import (
+    binary_sensor,
+    button,
+    event,
+    number,
+    select,
+    sensor,
+    switch,
+    time,
+)
 from custom_components.alwaysfull.binary_sensor import BINARY_SENSORS
+from custom_components.alwaysfull.button import BUTTONS, AlwaysFullResetFilterButton
 from custom_components.alwaysfull.const import (
     ALERT_OPTIONS,
     ALERT_TYPE_OPTIONS,
@@ -39,10 +49,19 @@ from custom_components.alwaysfull.const import (
     UNKNOWN,
 )
 from custom_components.alwaysfull.event import ALERT_EVENTS
+from custom_components.alwaysfull.number import NUMBERS, AlwaysFullNumber
+from custom_components.alwaysfull.select import SELECTS, AlwaysFullSelect
 from custom_components.alwaysfull.sensor import (
     SENSORS,
     AlwaysFullSensorEntityDescription,
 )
+from custom_components.alwaysfull.switch import (
+    NOTIFY_SWITCHES,
+    SWITCHES,
+    AlwaysFullNotifySwitch,
+    AlwaysFullSwitch,
+)
+from custom_components.alwaysfull.time import TIMES, AlwaysFullTime
 
 from .conftest import bowl_data
 
@@ -58,7 +77,32 @@ PLATFORM_TABLES = {
     "sensor": SENSORS,
     "binary_sensor": BINARY_SENSORS,
     "event": ALERT_EVENTS,
+    "number": NUMBERS,
+    "switch": (*SWITCHES, *NOTIFY_SWITCHES),
+    "select": SELECTS,
+    "time": TIMES,
+    "button": BUTTONS,
 }
+
+# The write platforms, and the value each must declare. Unlike the read
+# platforms these DO talk to the vendor, one request per entity the user
+# touches, so the value is a real throttle rather than a convention.
+WRITE_MODULES = (number, switch, select, time, button)
+
+# Everything the user can change is a setting, not a reading: Home
+# Assistant's own convention is that these belong in the device's
+# configuration section rather than on a dashboard card.
+WRITE_TABLES = (NUMBERS, SWITCHES, NOTIFY_SWITCHES, SELECTS, TIMES, BUTTONS)
+
+# Every concrete entity class the write platforms add.
+WRITE_ENTITY_CLASSES = (
+    AlwaysFullNumber,
+    AlwaysFullSwitch,
+    AlwaysFullNotifySwitch,
+    AlwaysFullSelect,
+    AlwaysFullTime,
+    AlwaysFullResetFilterButton,
+)
 
 # What each sensor is meant to be categorised as, stated here so the choice
 # survives a snapshot regeneration. `last_alert` is deliberately NOT
@@ -298,3 +342,84 @@ def test_the_alert_mapping_is_the_only_one() -> None:
     # Each platform holds its OWN list. Handing both the same one would let
     # anything that reordered or extended it do so for both at once.
     assert last_alert.options is not alert_event.event_types
+
+
+# -- Write platforms ------------------------------------------------------
+
+
+@pytest.mark.parametrize("module", WRITE_MODULES, ids=lambda m: m.__name__.split(".")[-1])
+def test_write_platforms_declare_parallel_updates_of_one(module: Any) -> None:
+    """Every write platform states `PARALLEL_UPDATES = 1`.
+
+    Not a convention check, unlike the read platforms' `0`: these modules
+    are the only ones in the integration that send requests of their own,
+    against a cloud API that answers 429. A module that dropped the
+    declaration would inherit the platform default and let Home Assistant
+    fan out as many simultaneous requests as the user touched settings.
+    """
+    assert module.PARALLEL_UPDATES == 1
+
+
+def test_every_writable_entity_is_a_configuration_entity() -> None:
+    """Settings belong in the device's configuration section.
+
+    Set once on the two write bases rather than on twenty-odd
+    descriptions, so the assertion is on the bases -- plus a check that no
+    description quietly overrides it, since a description's category would
+    be ignored anyway and the disagreement would be invisible.
+
+    Stated here rather than only in the snapshots because a
+    `--snapshot-update` would happily bless a dashboard full of sliders.
+    """
+    # Read off an INSTANCE, because that is the only place the answer is
+    # the real one: Home Assistant turns every `_attr_*` into a property on
+    # the class, and `Entity.entity_category` resolves the `_attr_` value,
+    # the description's value and the default in a specific order. A bare
+    # `__new__` skips the constructor, which needs a coordinator; nothing
+    # in this property depends on anything the constructor sets.
+    for entity_class in WRITE_ENTITY_CLASSES:
+        entity = object.__new__(entity_class)
+        assert entity.entity_category is EntityCategory.CONFIG, entity_class.__name__
+
+    for table in WRITE_TABLES:
+        for description in table:
+            assert description.entity_category is None, (
+                f"{description.key}: the base class already sets the category, "
+                "and a description's value would be ignored"
+            )
+
+
+def test_write_entity_keys_and_translation_keys_are_unique_per_platform() -> None:
+    """A duplicate key collides two entities onto one unique id."""
+    for table in (NUMBERS, (*SWITCHES, *NOTIFY_SWITCHES), SELECTS, TIMES, BUTTONS):
+        keys = [description.key for description in table]
+        assert len(keys) == len(set(keys))
+        translation_keys = [description.translation_key for description in table]
+        assert len(translation_keys) == len(set(translation_keys))
+        assert all(translation_keys)
+
+
+def test_number_ranges_are_ordered_and_stepped() -> None:
+    """A minimum above the maximum makes an entity Home Assistant cannot set.
+
+    Home Assistant does not validate this at definition time; the entity
+    simply rejects every value the user picks.
+    """
+    for description in NUMBERS:
+        assert description.native_min_value < description.native_max_value, description.key
+        assert description.native_step is not None, description.key
+        assert description.native_step > 0, description.key
+
+
+def test_the_alert_switches_do_not_restate_the_alert_mapping() -> None:
+    """One vendor-spelling table, shared by the sensor, the event and these.
+
+    The switches key off `ALERT_TYPE_OPTIONS.values()`; a hand-written list
+    here that dropped or misspelled one entry would leave that alert
+    permanently unreachable from Home Assistant, with nothing red.
+    """
+    alert_switches = [d for d in NOTIFY_SWITCHES if d.key.startswith("alert_")]
+    assert [d.key for d in alert_switches] == [
+        f"alert_{option}" for option in ALERT_TYPE_OPTIONS.values()
+    ]
+    assert len(alert_switches) == len(ALERT_TYPES)

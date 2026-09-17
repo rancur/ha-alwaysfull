@@ -30,6 +30,22 @@ FAKE_METHODS = (
     "drinking_log",
     "notify_log",
     "notify_config",
+    # Writers. These matter more than the readers, not less: the device-id
+    # parameter name is NOT uniform across them (`devNo` for the config
+    # writers, `deviceId` for `set_units`), and the write platforms reach
+    # them only through the fake. A renamed or re-ordered parameter in
+    # `api.py` would leave every write test green against a client that no
+    # longer exists.
+    "save_notify_config",
+    "set_flush_config",
+    "set_sleep_config",
+    "set_filter_config",
+    "set_maintenance_config",
+    "set_water_config",
+    "set_log_config",
+    "set_units",
+    "set_device_type",
+    "reset_filter",
 )
 
 

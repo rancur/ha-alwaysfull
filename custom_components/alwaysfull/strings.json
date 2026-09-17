@@ -72,6 +72,11 @@
         "name": "Water source detached"
       }
     },
+    "button": {
+      "reset_filter": {
+        "name": "Reset filter life"
+      }
+    },
     "event": {
       "alert": {
         "name": "Alert",
@@ -103,6 +108,45 @@
           "raw_type": {
             "name": "Vendor alert type"
           }
+        }
+      }
+    },
+    "number": {
+      "daily_maximum_water": {
+        "name": "Daily maximum water"
+      },
+      "daily_minimum_water": {
+        "name": "Daily minimum water"
+      },
+      "filter_capacity": {
+        "name": "Filter capacity"
+      },
+      "filter_lifetime": {
+        "name": "Filter lifetime"
+      },
+      "flush_duration": {
+        "name": "Flush duration"
+      },
+      "flush_interval": {
+        "name": "Flush interval"
+      },
+      "maintenance_interval": {
+        "name": "Maintenance interval"
+      }
+    },
+    "select": {
+      "bowl_size": {
+        "name": "Bowl size",
+        "state": {
+          "7_inch": "7 inch",
+          "9_inch": "9 inch"
+        }
+      },
+      "units": {
+        "name": "Units",
+        "state": {
+          "fl_oz": "Fluid ounces",
+          "ml": "Millilitres"
         }
       }
     },
@@ -143,6 +187,61 @@
       },
       "water_today": {
         "name": "Water today"
+      }
+    },
+    "switch": {
+      "alert_daily_decreased": {
+        "name": "Drank less than usual alerts"
+      },
+      "alert_daily_maximum": {
+        "name": "Daily maximum reached alerts"
+      },
+      "alert_fill_failed": {
+        "name": "Fill failed alerts"
+      },
+      "alert_hardware_fault": {
+        "name": "Hardware fault alerts"
+      },
+      "alert_high_water_level": {
+        "name": "High water level alerts"
+      },
+      "alert_not_attached": {
+        "name": "Water source not attached alerts"
+      },
+      "alert_operation_confirmation": {
+        "name": "Operation confirmed alerts"
+      },
+      "alert_replace_bowl_filter": {
+        "name": "Replace bowl filter alerts"
+      },
+      "alert_replace_wall_filter": {
+        "name": "Replace wall filter alerts"
+      },
+      "alert_tilted": {
+        "name": "Tilted alerts"
+      },
+      "drinking_log": {
+        "name": "Drinking log recording"
+      },
+      "email_alerts": {
+        "name": "Email alerts"
+      },
+      "flush_after_filling": {
+        "name": "Flush only after filling"
+      },
+      "sleep_mode": {
+        "name": "Sleep mode"
+      },
+      "text_alerts": {
+        "name": "Text alerts"
+      }
+    },
+    "time": {
+      "sleep_end": {
+        "name": "Sleep end"
+      },
+      "sleep_start": {
+        "name": "Sleep start"
       }
     }
   },

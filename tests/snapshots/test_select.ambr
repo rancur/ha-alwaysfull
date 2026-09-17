@@ -1,0 +1,237 @@
+# serializer version: 1
+# name: test_all_select_entities[select.second_bowl_bowl_size-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        '9_inch',
+        '7_inch',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.second_bowl_bowl_size',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Bowl size',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Bowl size',
+    'platform': 'alwaysfull',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'bowl_size',
+    'unique_id': '001122334455_bowl_size',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.second_bowl_bowl_size-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Second Bowl Bowl size',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        '9_inch',
+        '7_inch',
+      ]),
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.second_bowl_bowl_size',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': '7_inch',
+  })
+# ---
+# name: test_all_select_entities[select.second_bowl_units-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        'ml',
+        'fl_oz',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.second_bowl_units',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Units',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Units',
+    'platform': 'alwaysfull',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'units',
+    'unique_id': '001122334455_units',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.second_bowl_units-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Second Bowl Units',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        'ml',
+        'fl_oz',
+      ]),
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.second_bowl_units',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'fl_oz',
+  })
+# ---
+# name: test_all_select_entities[select.test_bowl_bowl_size-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        '9_inch',
+        '7_inch',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.test_bowl_bowl_size',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Bowl size',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Bowl size',
+    'platform': 'alwaysfull',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'bowl_size',
+    'unique_id': 'aabbccddeeff_bowl_size',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.test_bowl_bowl_size-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Test Bowl Bowl size',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        '9_inch',
+        '7_inch',
+      ]),
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.test_bowl_bowl_size',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': '9_inch',
+  })
+# ---
+# name: test_all_select_entities[select.test_bowl_units-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': list([
+      None,
+    ]),
+    'area_id': None,
+    'capabilities': dict({
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        'ml',
+        'fl_oz',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'select',
+    'entity_category': <EntityCategory.CONFIG: 'config'>,
+    'entity_id': 'select.test_bowl_units',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Units',
+    'options': dict({
+    }),
+    'original_device_class': None,
+    'original_icon': None,
+    'original_name': 'Units',
+    'platform': 'alwaysfull',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'units',
+    'unique_id': 'aabbccddeeff_units',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_all_select_entities[select.test_bowl_units-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Test Bowl Units',
+      <SelectEntityCapabilityAttribute.OPTIONS: 'options'>: list([
+        'ml',
+        'fl_oz',
+      ]),
+    }),
+    'context': <ANY>,
+    'entity_id': 'select.test_bowl_units',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'ml',
+  })
+# ---

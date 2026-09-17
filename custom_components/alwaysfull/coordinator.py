@@ -299,3 +299,30 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
                 self.async_set_updated_data(self.data)
 
         await self.async_request_refresh()
+
+    async def async_refresh_notify_config(self) -> None:
+        """Re-read the ACCOUNT's notification config right after writing it.
+
+        The per-device analogue of `async_refresh_after_write`, and it
+        exists for the same reason: `notify/getConfig` is polled only once
+        every `NOTIFY_CONFIG_EVERY_N_POLLS` cycles, so without this a
+        notification switch would sit on its pre-write value for up to ten
+        poll intervals before catching up.
+
+        Deliberately does NOT request a full poll: nothing in the device
+        data depends on this object, so a full poll would spend a request
+        per bowl to learn nothing.
+        """
+        try:
+            self.notify_config = await self.client.notify_config()
+        except (
+            AlwaysFullError,
+            TimeoutError,
+            aiohttp.ClientError,
+            ValueError,
+        ) as err:
+            # The save itself already succeeded; failing here only means
+            # the switch may lag until the next scheduled fetch.
+            LOGGER.warning("Could not re-read the notification config after a write: %s", err)
+        else:
+            self.async_update_listeners()
