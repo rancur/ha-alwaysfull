@@ -73,7 +73,6 @@ from .entity import (
     ConfigGroup,
     async_add_bowl_entities,
 )
-from .models import UNITS_FLUID_OUNCES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -116,18 +115,6 @@ MAX_MAINTENANCE_WARNING_SECONDS = MAX_MAINTENANCE_DAYS * 86400
 # and an unbounded box invites a typo that trips the daily-maximum alert
 # for ever. Stated in the bowl's OWN units, which is what the wire carries.
 MAX_DAILY_WATER = 200000
-
-
-def _water_unit(bowl: BowlData) -> str:
-    """Return the bowl's own volume unit (`units`: 1 = mL, 2 = fl oz).
-
-    The daily thresholds are stored in whatever unit the bowl is set to --
-    which is why `waterConfig` has to echo `units` back -- so the entity
-    has to follow the device rather than pick one.
-    """
-    if bowl.state.units == UNITS_FLUID_OUNCES:
-        return UnitOfVolume.FLUID_OUNCES
-    return UnitOfVolume.MILLILITERS
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -309,7 +296,11 @@ NUMBERS: tuple[AlwaysFullNumberEntityDescription, ...] = (
         native_max_value=MAX_DAILY_WATER,
         native_step=1,
         mode=NumberMode.BOX,
-        unit_fn=_water_unit,
+        # The daily thresholds are stored in whatever unit the bowl is set
+        # to -- which is why `waterConfig` has to echo `units` back -- so
+        # the entity follows the device. The mapping itself is `models`',
+        # shared with the water-consumed sensor.
+        unit_fn=lambda bowl: bowl.state.water_unit,
         value_fn=lambda config: config.day_min_water,
         set_fn=_set_day_min_water,
         group=WATER_GROUP,
@@ -321,7 +312,11 @@ NUMBERS: tuple[AlwaysFullNumberEntityDescription, ...] = (
         native_max_value=MAX_DAILY_WATER,
         native_step=1,
         mode=NumberMode.BOX,
-        unit_fn=_water_unit,
+        # The daily thresholds are stored in whatever unit the bowl is set
+        # to -- which is why `waterConfig` has to echo `units` back -- so
+        # the entity follows the device. The mapping itself is `models`',
+        # shared with the water-consumed sensor.
+        unit_fn=lambda bowl: bowl.state.water_unit,
         value_fn=lambda config: config.day_max_water,
         set_fn=_set_day_max_water,
         group=WATER_GROUP,

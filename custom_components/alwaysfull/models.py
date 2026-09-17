@@ -1,8 +1,14 @@
 """Domain models and wire<->UI unit conversions for Always Full.
 
-This module has no Home Assistant imports so it can be exercised by plain
-pytest with no test harness -- it sits between the HA-free `api.py` client
-and the HA entity layer, and staying HA-free keeps it independently testable.
+This module imports nothing from Home Assistant except `homeassistant.const`,
+which is a module of plain constants and enums with no runtime behind it --
+so this file still runs under plain pytest with no test harness, which is
+what keeps it independently testable. It sits between the HA-free `api.py`
+client and the HA entity layer, and the one exception is deliberate:
+`water_unit` below maps the vendor's `units` enum onto the unit Home
+Assistant is given, and that mapping is a conversion like every other
+conversion here. Naming the unit somewhere else would put two of this
+module's job in two places.
 
 The vendor's wire format and its UI format disagree on almost every
 configurable field, and nothing in the API response tells you which is
@@ -48,6 +54,8 @@ import dataclasses
 import datetime
 import hashlib
 from typing import Any
+
+from homeassistant.const import UnitOfVolume
 
 # -- Conversion constants (verbatim from the vendor client) -----------------
 
@@ -135,6 +143,27 @@ def device_type_to_bowl_size_inches(device_type: int) -> int:
 def bowl_size_inches_to_device_type(inches: int) -> int:
     """Convert a bowl size in inches (UI) to the vendor's inverted enum (wire)."""
     return DEVICE_TYPE_7_INCH if inches == BOWL_SIZE_7_INCH else DEVICE_TYPE_9_INCH
+
+
+def water_unit(units: int) -> str:
+    """Convert the vendor's `units` enum to a Home Assistant volume unit.
+
+    1 = millilitres, 2 = fluid ounces. Anything else falls back to
+    millilitres -- the vendor's own default -- rather than raising: this
+    is read inside a coordinator update, where an exception breaks every
+    other entity on the bowl too.
+
+    ONE definition, because THREE entities across TWO platform modules
+    take their unit from the bowl rather than from themselves: water
+    consumed in `sensor.py`, and both daily thresholds in `number.py`.
+    It was written out twice, verbatim, which is a conversion waiting to
+    be half-fixed -- a bowl switched to fluid ounces reading its
+    consumption in ounces and its daily maximum in millilitres, with
+    nothing raising.
+    """
+    if units == UNITS_FLUID_OUNCES:
+        return UnitOfVolume.FLUID_OUNCES
+    return UnitOfVolume.MILLILITERS
 
 
 def filter_life_percent(state: dict[str, Any]) -> float | None:
@@ -278,6 +307,11 @@ class BowlState:
     def bowl_size_inches(self) -> int:
         """9 or 7, decoded from the vendor's inverted `deviceType` enum."""
         return device_type_to_bowl_size_inches(self.device_type_raw)
+
+    @property
+    def water_unit(self) -> str:
+        """The volume unit this bowl is set to, as Home Assistant spells it."""
+        return water_unit(self.units)
 
     @property
     def is_online(self) -> bool:

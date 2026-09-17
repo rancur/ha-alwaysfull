@@ -49,6 +49,7 @@ from custom_components.alwaysfull.const import (
     UNKNOWN,
 )
 from custom_components.alwaysfull.event import ALERT_EVENTS
+from custom_components.alwaysfull.models import water_unit
 from custom_components.alwaysfull.number import NUMBERS, AlwaysFullNumber
 from custom_components.alwaysfull.select import SELECTS, AlwaysFullSelect
 from custom_components.alwaysfull.sensor import (
@@ -148,6 +149,33 @@ def possible_units(description: AlwaysFullSensorEntityDescription) -> set[str]:
     if description.unit_fn is not None:
         units |= {description.unit_fn(bowl_data(units=value)) for value in UNITS_VALUES}
     return {unit for unit in units if unit is not None}
+
+
+@pytest.mark.parametrize("units", UNITS_VALUES)
+def test_every_unit_that_follows_the_bowl_comes_from_one_definition(units: int) -> None:
+    """The sensor and the numbers must report the SAME volume unit.
+
+    Three entities take their unit from the bowl rather than from
+    themselves -- water consumed, and the two daily thresholds -- and they
+    live in two different platform modules. The mapping was written out
+    twice, verbatim, which is a unit conversion waiting to be half-fixed:
+    a bowl switched to fluid ounces would then read its daily maximum in
+    millilitres while its consumption read in ounces, and nothing would
+    raise.
+
+    Asserted against `models.water_unit`, the single definition, rather
+    than the two against each other: two copies that drifted TOGETHER
+    would satisfy the weaker form.
+    """
+    bowl = bowl_data(units=units)
+    unit_fns = [
+        description.unit_fn
+        for table in (SENSORS, NUMBERS)
+        for description in table
+        if description.unit_fn is not None
+    ]
+    assert len(unit_fns) == 3, "water consumed and the two daily thresholds"
+    assert {unit_fn(bowl) for unit_fn in unit_fns} == {water_unit(units)}
 
 
 def assert_sensor_description_legal(description: AlwaysFullSensorEntityDescription) -> None:

@@ -15,8 +15,11 @@ import json
 import pathlib
 
 import pytest
+from homeassistant.const import UnitOfVolume
 
 from custom_components.alwaysfull.models import (
+    UNITS_FLUID_OUNCES,
+    UNITS_MILLILITRES,
     BowlConfig,
     BowlState,
     bowl_size_inches_to_device_type,
@@ -24,6 +27,7 @@ from custom_components.alwaysfull.models import (
     filter_life_percent,
     minutes_to_time,
     time_to_minutes,
+    water_unit,
 )
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
@@ -461,3 +465,21 @@ def test_filter_life_percent_from_combined_real_fixtures():
         }
     )
     assert round(pct, 1) == 98.2
+
+
+@pytest.mark.parametrize(
+    ("units", "expected"),
+    [
+        (UNITS_MILLILITRES, UnitOfVolume.MILLILITERS),
+        (UNITS_FLUID_OUNCES, UnitOfVolume.FLUID_OUNCES),
+        # Anything else falls back to millilitres rather than raising: an
+        # unrecognised `units` must not take down a coordinator update, and
+        # millilitres is the vendor's own default (`units` 1).
+        (0, UnitOfVolume.MILLILITERS),
+        (99, UnitOfVolume.MILLILITERS),
+    ],
+)
+def test_water_unit_maps_the_vendor_enum(units: int, expected: str) -> None:
+    """The bowl's `units` enum decides the unit, in ONE place."""
+    assert water_unit(units) == expected
+    assert BowlState(units=units).water_unit == expected

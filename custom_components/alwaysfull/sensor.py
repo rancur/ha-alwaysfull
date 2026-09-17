@@ -32,7 +32,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime, UnitOfVolume
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
 from homeassistant.core import callback
 
 from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, UNKNOWN
@@ -41,7 +41,6 @@ from .models import (
     SLAVE_TYPE_BOTTLE_PUMP,
     SLAVE_TYPE_NONE,
     SLAVE_TYPE_WALL_UNIT,
-    UNITS_FLUID_OUNCES,
     alert_sort_key,
     filter_life_percent,
 )
@@ -185,13 +184,6 @@ def _water_source_attributes(bowl: BowlData) -> dict[str, Any]:
     return {ATTR_RAW_SLAVE_TYPE: bowl.state.slave_type}
 
 
-def _water_unit(bowl: BowlData) -> str:
-    """Return the bowl's own volume unit (`units`: 1 = mL, 2 = fl oz)."""
-    if bowl.state.units == UNITS_FLUID_OUNCES:
-        return UnitOfVolume.FLUID_OUNCES
-    return UnitOfVolume.MILLILITERS
-
-
 @dataclass(frozen=True, kw_only=True)
 class AlwaysFullSensorEntityDescription(SensorEntityDescription):
     """Describes one Always Full sensor."""
@@ -217,7 +209,10 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         # on a metric Home Assistant. The fractional millilitres that falls
         # out of that conversion are noise for a pet's water bowl.
         suggested_display_precision=0,
-        unit_fn=_water_unit,
+        # `units` -> unit lives in `models`, with every other conversion:
+        # `number.py`'s daily thresholds read the same bowl field, and two
+        # copies of one mapping is a conversion waiting to be half-fixed.
+        unit_fn=lambda bowl: bowl.state.water_unit,
         value_fn=lambda bowl: bowl.water_today,
     ),
     AlwaysFullSensorEntityDescription(
