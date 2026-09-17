@@ -279,6 +279,19 @@ def test_the_shipped_version_is_the_one_users_are_asked_to_report() -> None:
 
     Read from the files rather than restated here, since a constant copied
     into the test is a copy of the thing under test.
+
+    TO BE PLAIN ABOUT WHAT THIS IS, because the commit that added it said
+    "stop the version living in two places" and a reader could take that
+    for single-sourcing: the version still lives in two files, and it
+    cannot be made to live in one. `manifest.json` is fixed by Home
+    Assistant, and a GitHub issue FORM is static YAML rendered by GitHub --
+    it has no interpolation, so the placeholder cannot read the manifest.
+    Deriving it would mean generating that file in CI and committing the
+    result, which trades a one-line edit for a bot commit on every release.
+
+    What this test buys instead is that the two cannot DISAGREE: bumping
+    the manifest alone fails the suite, which names the other file. So both
+    still have to be edited, and forgetting is what is impossible.
     """
     root = Path(__file__).parents[1]
     manifest = json.loads((root / "custom_components/alwaysfull/manifest.json").read_text())
