@@ -271,7 +271,7 @@
     'object_id_base': 'Last connected',
     'options': dict({
     }),
-    'original_device_class': None,
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
     'original_icon': None,
     'original_name': 'Last connected',
     'platform': 'alwaysfull',
@@ -286,6 +286,7 @@
 # name: test_all_sensor_entities[sensor.second_bowl_last_connected-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Second Bowl Last connected',
     }),
     'context': <ANY>,
@@ -293,7 +294,7 @@
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
-    'state': '2026-09-15 22:09:12',
+    'state': '2026-09-15T22:09:12+00:00',
   })
 # ---
 # name: test_all_sensor_entities[sensor.second_bowl_last_disconnected-entry]
@@ -321,7 +322,7 @@
     'object_id_base': 'Last disconnected',
     'options': dict({
     }),
-    'original_device_class': None,
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
     'original_icon': None,
     'original_name': 'Last disconnected',
     'platform': 'alwaysfull',
@@ -336,6 +337,7 @@
 # name: test_all_sensor_entities[sensor.second_bowl_last_disconnected-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Second Bowl Last disconnected',
     }),
     'context': <ANY>,
@@ -805,7 +807,7 @@
     'object_id_base': 'Last connected',
     'options': dict({
     }),
-    'original_device_class': None,
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
     'original_icon': None,
     'original_name': 'Last connected',
     'platform': 'alwaysfull',
@@ -820,6 +822,7 @@
 # name: test_all_sensor_entities[sensor.test_bowl_last_connected-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Test Bowl Last connected',
     }),
     'context': <ANY>,
@@ -827,7 +830,7 @@
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
-    'state': '2026-09-15 22:08:57',
+    'state': '2026-09-15T22:08:57+00:00',
   })
 # ---
 # name: test_all_sensor_entities[sensor.test_bowl_last_disconnected-entry]
@@ -855,7 +858,7 @@
     'object_id_base': 'Last disconnected',
     'options': dict({
     }),
-    'original_device_class': None,
+    'original_device_class': <SensorDeviceClass.TIMESTAMP: 'timestamp'>,
     'original_icon': None,
     'original_name': 'Last disconnected',
     'platform': 'alwaysfull',
@@ -870,6 +873,7 @@
 # name: test_all_sensor_entities[sensor.test_bowl_last_disconnected-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
+      <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'timestamp',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Test Bowl Last disconnected',
     }),
     'context': <ANY>,

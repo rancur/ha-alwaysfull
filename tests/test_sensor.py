@@ -9,7 +9,10 @@ the way the vendor means it, and that an outage recovers.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -436,31 +439,66 @@ async def test_total_runtime_reports_the_vendors_seconds_in_days(
     assert state.attributes["unit_of_measurement"] == "d"
 
 
-async def test_the_connection_stamps_are_published_exactly_as_sent(
+async def test_the_connection_stamps_are_published_as_utc_timestamps(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
-    """The vendor's naive strings are published verbatim, not reinterpreted.
+    """The vendor's naive strings are UTC, and are published as instants.
 
-    These are `"YYYY-MM-DD HH:MM:SS"` with NO zone, and the zone the vendor
-    means is unknown (see `sensor.py`). A TIMESTAMP sensor would have to
-    pick one, and picking wrong moves every reading by hours with nothing
-    to show for it. So the state is the string, character for character --
-    if this ever renders as an ISO instant, a zone has been guessed
-    somewhere.
+    The zone was an open question until it was measured three ways (see
+    `docs/VENDOR-API.md` §3.3): the fields do not shift with the signed
+    `timeZone`, they match the vendor's own explicitly-UTC notify format to
+    the second, and they match what the owner's own WiFi controller
+    recorded.
+
+    Asserted as the FULL ISO string, offset included. The suite's Home
+    Assistant runs at `US/Pacific`, so a parse in the local zone produces
+    the same wall clock with a `-07:00` offset and a
+    `startswith("2026-09-15T22:08:57")` check would pass it.
     """
     await setup_platform(hass, Platform.SENSOR)
 
     connected = hass.states.get(f"{WALL}last_connected")
     assert connected is not None
-    assert connected.state == "2026-09-15 22:08:57"
-    # No device class, so Home Assistant has not parsed it into anything.
-    assert "device_class" not in connected.attributes
+    assert connected.state == "2026-09-15T22:08:57+00:00"
+    assert connected.attributes["device_class"] == SensorDeviceClass.TIMESTAMP
+
+
+def test_the_connection_stamp_value_fn_returns_an_aware_utc_datetime() -> None:
+    """The value handed to Home Assistant is aware, and its offset is zero.
+
+    Three separate claims, because each rules out a different wrong
+    implementation and no one of them rules out all three:
+
+    - The INSTANT catches a parse in the host's local zone, which lands
+      seven hours away.
+    - `tzinfo is not None` catches a naive value. Home Assistant raises on
+      one under `device_class: timestamp`, but it raises inside the state
+      write, which is a broken entity rather than a red test.
+    - `utcoffset() == 0` catches a `dt_util.as_local` conversion. That
+      preserves the instant, so the first assertion accepts it -- and it
+      would publish a local-zone timestamp whose rendering then depends on
+      the zone of whoever is looking.
+    """
+    description = next(d for d in SENSORS if d.key == "online_time")
+    value = description.value_fn(bowl_data())
+
+    assert value == datetime(2026, 9, 15, 22, 8, 57, tzinfo=UTC)
+    assert isinstance(value, datetime)
+    assert value.tzinfo is not None
+    assert value.utcoffset() == timedelta(0)
 
 
 async def test_last_disconnected_is_unknown_while_the_bowl_is_connected(
     hass: HomeAssistant, mock_api: FakeAlwaysFullClient
 ) -> None:
     """`offlineTime` is the null-when-online half of the pair.
+
+    `unknown`, and specifically not a stand-in instant. A TIMESTAMP sensor
+    that answered the epoch would read as a bowl that disconnected in 1970
+    and one that answered `utcnow()` as a bowl that just dropped -- both of
+    which look like data rather than like the absence of it, and the second
+    would trigger any automation watching for a disconnection, on every
+    poll, for ever.
 
     Shipping both halves rather than merging them into one "last seen"
     reading is the point: a merge would have to decide which field wins,
@@ -486,4 +524,41 @@ async def test_a_dropped_bowl_reports_when_it_dropped(
 
     state = hass.states.get(f"{WALL}last_disconnected")
     assert state is not None
-    assert state.state == "2026-09-16 04:11:09"
+    assert state.state == "2026-09-16T04:11:09+00:00"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "not a timestamp",
+        # Right shape, impossible fields: this one raises out of the parse
+        # by a different route than a malformed format does.
+        "2026-13-45 99:99:99",
+        # Not a string at all. Raises `TypeError` rather than `ValueError`,
+        # so a narrower guard would let it through.
+        1758000537,
+        ["2026-09-15 22:08:57"],
+    ],
+)
+async def test_an_unparseable_stamp_is_unknown_and_does_not_break_the_update(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, raw: object
+) -> None:
+    """A stamp this integration cannot read costs that one sensor, nothing more.
+
+    The parse runs inside a coordinator listener, so an exception there
+    does not just blank this sensor -- it aborts the state write for every
+    other entity on the bowl. The second assertion is the one that proves
+    that: `water_today` moves to its new value on the same poll that
+    carried the unreadable stamp.
+    """
+    entry = await setup_platform(hass, Platform.SENSOR)
+    mock_api.device_rows_override = [device_row(onlineTime=raw)]
+    mock_api.drinking_totals[DEVICE_ID] = 1234
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    connected = hass.states.get(f"{WALL}last_connected")
+    assert connected is not None
+    assert connected.state == STATE_UNKNOWN
+    assert hass.states.get(f"{WALL}water_today").state == "1234"

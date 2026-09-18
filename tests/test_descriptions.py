@@ -293,6 +293,18 @@ def test_sensor_descriptions_are_legal(
             None,
             "not a Home Assistant state class",
         ),
+        # TIMESTAMP permits NO state class at all --
+        # `DEVICE_CLASS_STATE_CLASSES[TIMESTAMP]` is the empty set -- so the
+        # two connection stamps sit one edit away from an illegal pairing.
+        # Home Assistant logs a warning and drops the statistics rather
+        # than raising, which is exactly the shape of failure this module
+        # exists for.
+        (
+            SensorDeviceClass.TIMESTAMP,
+            SensorStateClass.MEASUREMENT,
+            None,
+            "state class .* is not permitted for",
+        ),
     ],
 )
 def test_the_legality_check_rejects_the_two_traps(
@@ -441,6 +453,26 @@ def test_entity_categories_and_default_enablement() -> None:
         if not description.entity_registry_enabled_default
     }
     assert disabled == EXPECTED_DISABLED_BY_DEFAULT
+
+
+def test_the_connection_stamps_are_timestamp_sensors_with_no_state_class() -> None:
+    """Both connection stamps declare TIMESTAMP, and neither declares more.
+
+    Stated here as well as in the snapshot because this is the decision, not
+    a rendering of it: a `--snapshot-update` would bless dropping the device
+    class back to a bare string without a word.
+
+    The absent state class is half the point. `TIMESTAMP` permits none --
+    `DEVICE_CLASS_STATE_CLASSES[TIMESTAMP]` is empty -- and Home Assistant
+    answers an illegal pairing with a log warning, not an error.
+    """
+    stamps = [d for d in SENSORS if d.key in ("online_time", "offline_time")]
+    assert len(stamps) == 2, "both halves of the pair ship"
+    for description in stamps:
+        assert description.device_class is SensorDeviceClass.TIMESTAMP, description.key
+        assert description.state_class is None, description.key
+        assert not possible_units(description), description.key
+    assert DEVICE_CLASS_STATE_CLASSES[SensorDeviceClass.TIMESTAMP] == set()
 
 
 def test_the_alert_mapping_is_the_only_one() -> None:

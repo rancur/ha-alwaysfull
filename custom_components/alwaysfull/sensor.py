@@ -6,8 +6,8 @@ field, which unit, which device class), and the class-per-entity shape is
 what turns a six-sensor integration into a four-thousand-line file nobody
 can audit.
 
-Two device-class facts were verified by introspecting the installed Home
-Assistant, and both fail SILENTLY (a log warning plus broken long-term
+Three device-class facts were verified by introspecting the installed Home
+Assistant. The first two fail SILENTLY (a log warning plus broken long-term
 statistics, not an exception), so they are recorded here rather than
 rediscovered later:
 
@@ -19,6 +19,13 @@ rediscovered later:
 - The only legal state classes for VOLUME are `TOTAL_INCREASING` and
   `TOTAL`. `MEASUREMENT` is NOT legal on VOLUME (it is legal on
   `VOLUME_STORAGE`, a different class for a different meaning).
+- `SensorDeviceClass.TIMESTAMP` permits NO state class at all -- its entry
+  in `DEVICE_CLASS_STATE_CLASSES` is the empty set -- and it is the one
+  class here that fails LOUDLY on a bad value: a naive datetime raises
+  `ValueError` ("which is missing timezone information") inside the state
+  write. Home Assistant also normalises an aware value to UTC before
+  rendering it, which is why a wrongly-zoned parse shows up as a plausible
+  instant some hours away rather than as anything that looks broken.
 """
 
 from __future__ import annotations
@@ -43,16 +50,24 @@ from .models import (
     SLAVE_TYPE_WALL_UNIT,
     alert_sort_key,
     filter_life_percent,
+    parse_device_timestamp,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import datetime
 
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
     from homeassistant.helpers.typing import StateType
 
     from .coordinator import AlwaysFullConfigEntry, AlwaysFullCoordinator, BowlData
+
+    # What a `value_fn` is allowed to return. `StateType` covers the
+    # strings, numbers and `None` every other sensor here reports; the
+    # `datetime` is for the two TIMESTAMP sensors, which Home Assistant
+    # accepts as a `native_value` and renders itself.
+    type SensorValue = StateType | datetime
 
 # `UNKNOWN`, `ALERT_TYPE_OPTIONS` and `ATTR_RAW_TYPE` are imported from
 # `const` rather than defined here: the event platform reports the very same
@@ -188,7 +203,7 @@ def _water_source_attributes(bowl: BowlData) -> dict[str, Any]:
 class AlwaysFullSensorEntityDescription(SensorEntityDescription):
     """Describes one Always Full sensor."""
 
-    value_fn: Callable[[BowlData], StateType]
+    value_fn: Callable[[BowlData], SensorValue]
     # Set only where the unit is a property of the bowl rather than of the
     # sensor -- i.e. water consumed, which the user can switch between
     # millilitres and fluid ounces on the device itself.
@@ -271,57 +286,51 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
     ),
     # -- The two connection stamps --------------------------------------
     #
-    # PLAIN STRING SENSORS, not TIMESTAMP ones, and that is a decision
-    # rather than an omission.
+    # TIMESTAMP sensors as of 0.4.0, and a BREAKING change: through 0.3.x
+    # these published the vendor's naive `"YYYY-MM-DD HH:MM:SS"` string
+    # verbatim, because a TIMESTAMP sensor must hand Home Assistant an
+    # AWARE datetime and the zone the vendor meant was not established.
+    # Guessing it would have moved every reading by hours while looking
+    # entirely normal -- a plausible instant, a history graph in the wrong
+    # place, and no error anywhere.
     #
-    # `onlineTime` and `offlineTime` arrive as naive
-    # `"YYYY-MM-DD HH:MM:SS"` -- no zone, no offset. A TIMESTAMP sensor
-    # must hand Home Assistant an AWARE datetime, so shipping one means
-    # choosing a zone for the vendor, and choosing wrong moves every
-    # reading by hours while looking entirely normal: the state renders as
-    # a perfectly plausible instant, the history graph is simply in the
-    # wrong place, and nothing anywhere reports an error.
+    # The zone is now MEASURED: UTC. What the old comment here treated as
+    # undeterminable turned on one negative result -- that these fields,
+    # unlike `drinking/log`, do not move with the signed `timeZone` -- plus
+    # two independent sources agreeing to the second. The evidence is in
+    # `models.parse_device_timestamp` and in `docs/VENDOR-API.md` §3.3,
+    # and it is recorded rather than summarised because the next person to
+    # doubt it should be able to re-run it.
     #
-    # The zone is not determinable from anything available here:
-    #
-    # - The vendor's own app never reads either field (live-verified; see
-    #   the design doc's "Detail and list rows ... carry six fields the app
-    #   never reads"), so there is no rendering code to inspect and no
-    #   displayed value to compare against.
-    # - The only OTHER timestamps the API returns, on `notify/log`, use a
-    #   different format that carries its zone explicitly
-    #   (`2026-09-16T23:35:36Z`). Two formats from one vendor is evidence
-    #   that these are produced by different code, not that they share a
-    #   zone.
-    # - Every request this client signs carries a `timeZone` field, and the
-    #   vendor demonstrably buckets `drinking/log` by it. So a per-request
-    #   localisation of these stamps is a live possibility, which would
-    #   make "the zone" not even a fixed property of the account.
-    #
-    # Guessing would be cheap to write and impossible to notice was wrong.
-    # The string is published exactly as sent: a user in the bowl's own
-    # locale can read it, an automation can compare it, and the day the
-    # zone IS established these become TIMESTAMP sensors with a conversion
-    # that can be written down.
+    # The parse lives in `models` with every other reading of a vendor
+    # field, and it reports `None` -- `unknown` -- rather than raising or
+    # substituting an instant. Both matter here: this runs in a coordinator
+    # listener, and `offlineTime` is null for as long as a bowl stays
+    # connected.
     #
     # BOTH halves ship, rather than one merged "last seen". `offlineTime`
     # is null while the bowl is connected and `onlineTime` is null on a
     # bowl that has never connected, but what the vendor does to
     # `onlineTime` when a connected bowl DROPS has never been observed. A
     # merged sensor would have to encode an answer to that; two sensors,
-    # each carrying exactly one field verbatim, encode none -- and the pair
-    # is what makes the answer observable the first time a real bowl drops.
+    # each carrying exactly one field, encode none -- and the pair is what
+    # makes the answer observable the first time a real bowl drops.
+    #
+    # No state class on either, and that is not an oversight: TIMESTAMP
+    # permits none at all.
     AlwaysFullSensorEntityDescription(
         key="online_time",
         translation_key="online_time",
+        device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda bowl: bowl.state.online_time,
+        value_fn=lambda bowl: parse_device_timestamp(bowl.state.online_time),
     ),
     AlwaysFullSensorEntityDescription(
         key="offline_time",
         translation_key="offline_time",
+        device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda bowl: bowl.state.offline_time,
+        value_fn=lambda bowl: parse_device_timestamp(bowl.state.offline_time),
     ),
     AlwaysFullSensorEntityDescription(
         key="firmware",
@@ -386,7 +395,7 @@ class AlwaysFullSensor(AlwaysFullEntity, SensorEntity):
         super()._handle_coordinator_update()
 
     @property
-    def native_value(self) -> StateType:
+    def native_value(self) -> SensorValue:
         """Return this sensor's value from the last poll."""
         bowl = self.bowl
         if bowl is None:

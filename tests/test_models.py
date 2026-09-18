@@ -26,6 +26,7 @@ from custom_components.alwaysfull.models import (
     device_type_to_bowl_size_inches,
     filter_life_percent,
     minutes_to_time,
+    parse_device_timestamp,
     time_to_minutes,
     water_unit,
 )
@@ -414,11 +415,10 @@ def test_bowl_config_from_real_device_config_fixture():
 def test_bowl_state_carries_the_connection_stamps_verbatim():
     """`onlineTime` / `offlineTime` are kept as the vendor's own strings.
 
-    Not parsed here, and deliberately so: they are NAIVE
-    `"YYYY-MM-DD HH:MM:SS"` stamps with no zone, and the vendor's zone for
-    them is unknown. Parsing one into a `datetime` means choosing a zone,
-    and a wrong choice silently misplaces every reading by hours. Keeping
-    the string keeps the uncertainty visible.
+    The model stays the record of what arrived on the wire; interpreting
+    it is `parse_device_timestamp`'s job, one layer up. Keeping the raw
+    string here means the diagnostics dump and the parsed sensor state can
+    be compared against each other if the vendor ever changes the format.
     """
     state = BowlState.from_api(
         {"onlineTime": "2026-09-15 22:08:57", "offlineTime": "2026-09-14 03:10:00"}
@@ -544,3 +544,107 @@ def test_a_config_that_omits_the_device_type_reports_no_bowl_size() -> None:
     value -- nothing was claimed, so nothing is reported.
     """
     assert BowlConfig.from_api({}).bowl_size_inches is None
+
+
+# -- The connection stamps are UTC ----------------------------------------
+#
+# The zone was an open question until it was measured; the evidence and the
+# negative result that pins it are written up in `docs/VENDOR-API.md` §3.3.
+# These tests are what stops the parse drifting back to a local reading,
+# which is a silent hours-off error rather than a visible failure.
+
+
+def test_parse_device_timestamp_reads_a_naive_vendor_stamp_as_utc():
+    """The vendor's naive `"YYYY-MM-DD HH:MM:SS"` is UTC, verified.
+
+    Asserted on the OFFSET as well as the instant, and both halves are
+    needed. A parse in the host's local zone gives a different instant, so
+    the equality catches it. A parse in UTC followed by a conversion to
+    local gives the SAME instant with a non-zero offset, which the
+    equality would happily accept -- and which would then be published to
+    Home Assistant as a local-zone timestamp, re-rendered against the
+    viewer's zone.
+    """
+    parsed = parse_device_timestamp("2026-09-15 22:08:57")
+    assert parsed == datetime.datetime(2026, 9, 15, 22, 8, 57, tzinfo=datetime.UTC)
+    assert parsed is not None
+    assert parsed.utcoffset() == datetime.timedelta(0)
+
+
+def test_parse_device_timestamp_returns_an_aware_datetime():
+    """A naive datetime must never leave this function.
+
+    Home Assistant RAISES on a naive value under `device_class: timestamp`
+    ("which is missing timezone information"), and it raises inside the
+    state write -- so this is the check that keeps the awareness from being
+    dropped by a later edit that still looks correct.
+    """
+    parsed = parse_device_timestamp("2026-09-15 22:08:57")
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+    assert parsed.tzinfo.utcoffset(parsed) is not None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "not a timestamp",
+        # Matches the shape and is still not a date. Worth its own case:
+        # `datetime.fromisoformat` raises `ValueError` from the FIELD
+        # values here rather than from the format, which is a second
+        # failure path through the same call.
+        "2026-13-45 99:99:99",
+        "2026",
+        # Non-strings. `fromisoformat` raises `TypeError`, not
+        # `ValueError`, so a `try/except ValueError` alone would let a
+        # vendor field that arrived as a number or a container take down
+        # the whole coordinator update.
+        1758000537,
+        ["2026-09-15 22:08:57"],
+        {"onlineTime": "2026-09-15 22:08:57"},
+    ],
+)
+def test_parse_device_timestamp_reports_nothing_rather_than_raising(value):
+    """Anything unparseable is `None` -- never an exception, never epoch.
+
+    `None` is what makes Home Assistant say `unknown`. The two wrong
+    answers this rules out are an exception (which fires inside a
+    coordinator listener and breaks the update for every other entity on
+    the bowl) and a fallback instant such as the epoch or `utcnow()`,
+    which reads as a real connection time that never happened.
+    """
+    assert parse_device_timestamp(value) is None
+
+
+def test_parse_device_timestamp_keeps_an_explicit_zone_when_one_is_sent():
+    """A stamp that carries its own zone is trusted over the UTC default.
+
+    The vendor already uses an explicitly-UTC format on its notify rows
+    (`2026-09-15T22:08:57Z`), so the device row acquiring an offset one day
+    is a realistic change rather than a hypothetical. UTC is the default
+    for a stamp that states NO zone; it does not override one that does.
+    """
+    assert parse_device_timestamp("2026-09-15T22:08:57Z") == datetime.datetime(
+        2026, 9, 15, 22, 8, 57, tzinfo=datetime.UTC
+    )
+    # Same instant, stated as an offset rather than as `Z`.
+    assert parse_device_timestamp("2026-09-16T00:08:57+02:00") == datetime.datetime(
+        2026, 9, 15, 22, 8, 57, tzinfo=datetime.UTC
+    )
+
+
+def test_parse_device_timestamp_agrees_with_the_vendors_own_utc_format():
+    """The two evidence rows that settled the zone, asserted against each other.
+
+    `onlineTime` reads `2026-09-15 22:08:57` on the live account, and the
+    bowl's first-ever `Operation_Confirmation` notify row -- which the
+    vendor stamps with an explicit `Z` -- reads `2026-09-15T22:08:57Z`.
+    Same second, same event, one format carrying a zone and one not. If
+    this integration's reading of the naive form ever stops matching the
+    vendor's own zoned form, the parse is wrong.
+    """
+    assert parse_device_timestamp("2026-09-15 22:08:57") == parse_device_timestamp(
+        "2026-09-15T22:08:57Z"
+    )

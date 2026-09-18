@@ -184,6 +184,74 @@ def filter_life_percent(state: dict[str, Any]) -> float | None:
     return remaining / can_use * 100
 
 
+# -- Device timestamps -------------------------------------------------------
+#
+# The vendor's naive `"YYYY-MM-DD HH:MM:SS"` stamps are UTC. That was an
+# open question through 0.3.x -- the fields carry no zone, the vendor's own
+# app never reads them, and a wrong zone silently misplaces every reading by
+# hours -- and it is now settled by measurement, three ways. The evidence,
+# including the negative result that distinguishes these fields from
+# `drinking/log`, is written up in `docs/VENDOR-API.md` §3.3; the short form
+# is:
+#
+# 1. They do NOT move with the signed `timeZone`. `drinking/log` demonstrably
+#    does (1028 mL at `-7` against 1489 mL at `0` for one window), so this
+#    had to be ruled out rather than assumed. `onlineTime`, `offlineTime`,
+#    `createTime` and `updateTime` come back byte-identical at `-7`, `0` and
+#    `+9`: stored in one fixed zone, returned unshifted, not relative to the
+#    caller.
+# 2. They match the vendor's OWN explicitly-UTC format to the second. An
+#    `onlineTime` of `2026-09-15 22:08:57` and the same bowl's first-ever
+#    `Operation_Confirmation` notify row, which the vendor stamps `Z`, at
+#    `2026-09-15T22:08:57Z`.
+# 3. Corroborated from outside the vendor entirely. The owner's own WiFi
+#    controller logged that bowl associating at 15:08 local
+#    (America/Phoenix, UTC-7) on 2026-09-15 -- 22:08 UTC.
+
+
+def parse_device_timestamp(value: Any) -> datetime.datetime | None:
+    """Return one vendor device-row stamp as an AWARE datetime, or `None`.
+
+    A stamp that states no zone is read as UTC (see the note above). A stamp
+    that states one is trusted as sent: the vendor already uses an
+    explicitly-zoned format on its notify rows, so the device row acquiring
+    an offset is a realistic change, and defaulting over a declared zone
+    would be the same hours-off error in the other direction.
+
+    Never returns a NAIVE datetime. Home Assistant raises on one under
+    `device_class: timestamp` -- "which is missing timezone information" --
+    and it raises inside the state write, where the result is a broken
+    entity rather than a visible failure.
+
+    Never raises, and never substitutes an instant. Anything unparseable is
+    `None`, which Home Assistant reports as `unknown`:
+
+    - `None` is the ordinary case, not an error case. `offlineTime` is null
+      for as long as a bowl stays connected and both halves are null on a
+      bowl that has never connected.
+    - A fallback instant would be a lie with the shape of data. The epoch
+      reads as a bowl that dropped in 1970 and `utcnow()` as one that just
+      dropped, on every poll, for ever.
+    - This runs inside a coordinator listener. An exception here does not
+      cost one sensor its value, it aborts the state write for every other
+      entity on that bowl -- so a vendor field that arrived as a number or a
+      container (`TypeError`, not `ValueError`) is caught by the type check
+      before `fromisoformat` ever sees it.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        # Both failure modes of the ONE call: a string that is not a
+        # datetime at all, and one shaped like a datetime whose fields are
+        # out of range (`"2026-13-45 99:99:99"` raises from the month).
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.UTC)
+    return parsed
+
+
 # -- Alert ordering ----------------------------------------------------------
 
 
@@ -263,16 +331,14 @@ class BowlState:
     # `onlineTime` / `offlineTime`, kept as the vendor's own strings.
     #
     # They arrive as NAIVE `"YYYY-MM-DD HH:MM:SS"` with no zone and no
-    # offset, and which zone the vendor means is not knowable from
-    # anything available: the app never reads either field, so there is no
-    # rendering code to inspect, and the other endpoint that stamps a time
-    # (`notify/log`) uses a DIFFERENT, explicitly-UTC format
-    # (`%Y-%m-%dT%H:%M:%SZ`), so it says nothing about this one.
+    # offset, and that zone is UTC -- measured, not assumed; see
+    # `parse_device_timestamp` above and `docs/VENDOR-API.md` §3.3.
     #
-    # `str | None`, never `datetime`, for exactly that reason: parsing
-    # means choosing a zone, and a wrong choice silently misplaces every
-    # reading by hours while looking completely normal. The uncertainty
-    # belongs where a reader can see it.
+    # Still `str | None` rather than `datetime`, but for a different reason
+    # than in 0.3.x. This model is the record of what arrived on the wire,
+    # and the diagnostics dump is built from it; `parse_device_timestamp`
+    # is where the reading happens, one layer up, so a parse that ever
+    # needs revisiting can be compared against what was actually sent.
     #
     # Exactly one of the pair is populated at a time -- `offlineTime` is
     # null while a bowl is connected -- and a bowl that has never connected
