@@ -492,6 +492,23 @@ Three more rules, all VERIFIED:
   about **twenty seconds** later. A client that re-reads straight after a write
   and displays the result will show the user their change reverting. Trust the
   value you sent until the next scheduled poll.
+- **A write that ANSWERS AN ERROR may still have been applied.** VERIFIED on
+  the live bowl 2026-09-17. A `flushConfig` write answered envelope `msg`
+  `"The setup failed."` (an `httpx.ReadTimeout` on a preceding request in the
+  same session), the integration correctly surfaced it as a failure and did
+  not retry — and the bowl's `fillWashState` went to `0` anyway, seven seconds
+  later, and held across roughly eight subsequent polls. The server stored it.
+
+  So `"The setup failed."` does **not** mean "nothing changed". Treat it as
+  *unknown*, not as *failed*. This matters most for read-modify-write callers
+  and for any automation that snapshots state and restores it afterwards: a
+  snapshot taken after an "unsuccessful" write can capture the value the write
+  actually installed, and then faithfully restore the wrong thing. If you need
+  to know, wait for the next poll rather than trusting the envelope.
+
+  A later `sleepConfig` write on the same account succeeded normally, so this
+  was not a dead session or a rate limit — `603` is the rate limit (§1.4) and
+  says so plainly.
 
 ### 3.5 Drinking log
 
@@ -840,6 +857,15 @@ deliberately hidden ones. Nothing in the app suggests which.
 
 Stated so nobody mistakes silence for absence of doubt:
 
+- **What `sleepState` actually DOES to the bowl.** The wire format is verified
+  (§3.3); the behaviour is not. Probed 2026-09-17 on live hardware: sleep mode
+  switched on with the window narrowed so it was genuinely active, and the
+  owner — the only instrument that can tell this bowl apart from the rest of
+  the house's plumbing — heard no flush across 2.5 hours, against one heard
+  minutes before the window opened. That is suggestive and no more: at a
+  ~60 min flush cadence the window expected only about two bursts. Nothing in
+  the API reports pump or flush activity, so there is no way to settle it by
+  reading. Do not write down "sleep mode stops the pump" until someone does.
 - The meaning of `controlStatus` on the device row.
 - The meaning of `config` (an int) on the notify config object.
 - Which of `notifyItems` / `notifyList` `saveConfig` actually reads.
