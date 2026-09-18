@@ -182,16 +182,42 @@ entities** shared by every bowl on the account.
 | Water source | `wall_unit`, `bottle_pump`, `none` or `unknown`. Diagnostic. |
 | Last alert | The newest alert's type, as one of the eleven values above. |
 | Total runtime | How long the bowl has been running in total, shown in days. Diagnostic. |
-| Last connected | When the bowl last connected, as the vendor's own `YYYY-MM-DD HH:MM:SS` string. Diagnostic. See the note below. |
-| Last disconnected | When it last dropped off. `unknown` while it is connected — the vendor sends one of this pair at a time. Diagnostic. |
+| Last connected | When the bowl last connected, as a real timestamp — Home Assistant shows it as relative time ("2 days ago"). Diagnostic. **Changed in 0.4.0**, see the note below. |
+| Last disconnected | When it last dropped off, as a real timestamp. `unknown` while it is connected — the vendor sends one of this pair at a time. Diagnostic. **Changed in 0.4.0.** |
 | Firmware version | Diagnostic, **disabled by default** — the device page already shows it. |
 
-**Why the two connection times are text and not timestamps.** The vendor sends
-them with no time zone and no offset, and nothing available says which zone it
-means: its own app never reads either field, and the only other timestamps in
-the API use a different format that states its zone explicitly. Publishing them
-as real timestamps would mean guessing, and a wrong guess moves every reading by
-hours while looking completely normal. So they are published exactly as sent.
+> [!IMPORTANT]
+> **Breaking change in 0.4.0: the two connection times are now timestamps, not
+> text.** If you have a template, an automation condition or a card that reads
+> the string form of `sensor.<bowl>_last_connected` or
+> `sensor.<bowl>_last_disconnected`, it has to change.
+>
+> | | State |
+> | --- | --- |
+> | **0.3.x and earlier** | `2026-09-15 22:08:57` |
+> | **0.4.0 onwards** | `2026-09-15T22:08:57+00:00` |
+>
+> Nothing else about them changed: same entity ids, same unique ids, nothing
+> to re-add or rename, and `unknown` still means the vendor sent nothing for
+> that half of the pair. History recorded before the upgrade keeps the old
+> string form, since that is what those rows were.
+>
+> **What you get for it.** Home Assistant now knows these are instants. It
+> renders them as relative time, sorts and graphs them correctly, and a
+> template can compare them with `as_datetime` and `now()` directly, instead
+> of pulling the string apart with `strptime` and then deciding for itself
+> which zone the pieces were in.
+>
+> **Why it took until 0.4.0.** The vendor sends these with no time zone and no
+> offset, and a timestamp sensor has to name one. Guessing wrong moves every
+> reading by hours while looking completely plausible, so until the zone was
+> established the string was published exactly as sent. It has since been
+> measured, three ways, and it is **UTC**: the fields do not shift with the
+> zone the client declares, they match the vendor's own explicitly-UTC alert
+> stamps to the second, and they match what the owner's own WiFi controller
+> logged for the same event. The evidence is in
+> [`docs/VENDOR-API.md`](docs/VENDOR-API.md) §3.3, and the upgrade note is in
+> [`CHANGELOG.md`](CHANGELOG.md).
 
 #### Binary sensors
 

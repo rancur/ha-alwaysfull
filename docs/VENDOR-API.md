@@ -296,6 +296,16 @@ Practical guidance:
   **toward zero**, so `-03:30` becomes `-3`. Flooring gives `-4` and moves every
   boundary by an hour.
 
+**This does NOT generalise to the rest of the API, and assuming it does is the
+symmetric mistake.** The device row's naive stamps — `onlineTime`,
+`offlineTime`, `createTime`, `updateTime` — are **not** localised by `timeZone`.
+They come back byte-identical at `-7`, `0` and `+9`, and they are UTC. That is a
+measured negative result, not an assumption; it is written up with its evidence
+in §3.3 under "The device row's naive datetimes are UTC". So there are two
+different rules for two sets of naive datetimes in one API: `drinking/log`
+*interprets* the datetimes you send against the zone you declare, while the
+device row *reports* datetimes in a fixed zone and ignores it.
+
 ---
 
 ## 3. Endpoint reference
@@ -368,8 +378,8 @@ The device row:
 | `deviceName` | string | User-chosen name | VERIFIED |
 | `status` | int | `1` = online; anything else is not | VERIFIED |
 | `version` | string | Firmware version | VERIFIED |
-| `createTime` / `updateTime` | string | `"YYYY-MM-DD HH:MM:SS"`, zone unstated | VERIFIED |
-| `onlineTime` / `offlineTime` | string \| null | Last connect / disconnect, `"YYYY-MM-DD HH:MM:SS"`, **zone unstated**. Exactly one of the pair is populated at a time; a bowl that has never connected carries null for both. | VERIFIED |
+| `createTime` / `updateTime` | string | `"YYYY-MM-DD HH:MM:SS"`, **UTC** — see below | VERIFIED |
+| `onlineTime` / `offlineTime` | string \| null | Last connect / disconnect, `"YYYY-MM-DD HH:MM:SS"`, **UTC** — see below. Exactly one of the pair is populated at a time; a bowl that has never connected carries null for both. | VERIFIED |
 | `deviceType` | int | Bowl size, **inverted** — see §4 | VERIFIED |
 | `slaveType` | int | `0` none, `1` bottle pump, `2` wall unit | VERIFIED |
 | `filterUsedTime` | int | Seconds of filter use | VERIFIED |
@@ -387,12 +397,62 @@ The device row:
 The app only ever tests the alarm fields `== 1`, never as a bitmask (VERIFIED,
 read in the app). INFERRED: they are plain flags.
 
-**The zone of `onlineTime` / `offlineTime` is genuinely unknown.** The app never
-reads either field, so there is no rendering code to inspect, and the only other
-timestamps in the API (`notify` rows) use a *different*, explicitly-UTC format,
-which says nothing about these. Parsing them means guessing a zone, and a wrong
-guess silently misplaces every reading by hours. This integration publishes them
-as the vendor's own strings for that reason.
+#### The device row's naive datetimes are UTC — VERIFIED
+
+`createTime`, `updateTime`, `onlineTime` and `offlineTime` all arrive as naive
+`"YYYY-MM-DD HH:MM:SS"` with no zone and no offset. **That zone is UTC.**
+
+Three measurements, all taken 2026-09-17 against one live account.
+
+**1. They are NOT localised per request — the negative result.** This is the one
+that has to be established first, and it is the one a reader of §2 will assume
+the other way. The signed `timeZone` field genuinely does change how the server
+interprets datetimes for `drinking/log`: the same window returns **1028 mL at
+`timeZone=-7` and 1489 mL at `timeZone=0`**. The device row's stamps do not
+behave that way. `onlineTime`, `offlineTime`, `createTime` and `updateTime` come
+back **byte-identical at `timeZone=-7`, `0` and `+9`**. They are stored in one
+fixed zone and returned unshifted; they are not relative to the caller, so "the
+zone" is a fixed property of the data rather than of the request.
+
+**2. They match the vendor's own explicitly-UTC format, to the second.**
+`onlineTime` read `2026-09-15 22:08:57`. The oldest row in
+`notify/getNotifyLog` — which the vendor stamps with an explicit `Z`
+(`%Y-%m-%dT%H:%M:%SZ`, §3.6) — is `2026-09-15T22:08:57Z`, and it is that bowl's
+first-ever `Operation_Confirmation`. Same instant, same second, same event, one
+format carrying a zone and one not.
+
+**3. Corroborated from outside the vendor entirely.** The UniFi controller on
+the owner's own network recorded that bowl associating to WiFi at **15:08 local
+time** (America/Phoenix, UTC-7) on 2026-09-15 — 22:08 UTC. It matches
+`onlineTime` exactly, from a source the vendor does not control.
+
+Two independent sources agreeing to the second, plus a negative result ruling
+out per-caller localisation.
+
+**What this document said before, and why.** Through 0.3.x this section read
+"the zone of `onlineTime` / `offlineTime` is genuinely unknown", on three
+arguments: the vendor's app never reads either field, so there was no rendering
+code to inspect; the only other timestamps in the API use a different format,
+which was treated as evidence of *different code* rather than of a shared zone;
+and
+§2's `timeZone` behaviour made per-request localisation a live possibility,
+which would have meant the zone was not even a fixed property of the account.
+
+The first two arguments were sound and remain true — they are why this could
+not be settled by reading, and why it took a measurement. The third is the one
+that was actually resolved, and it was resolved by *disproving* it: measurement
+1 above shows these fields do not move with `timeZone` at all. That removed the
+possibility that no fixed zone existed, and left measurements 2 and 3 free to
+identify which fixed zone it is.
+
+**What a client should do.** Parse as UTC **explicitly**. Do not read the host
+process's zone, do not use the application's configured zone, and do not let a
+naive datetime reach anything downstream. This integration parses them in
+`models.parse_device_timestamp` and publishes both connection stamps as Home
+Assistant `timestamp` sensors (0.4.0; they were plain strings before). A stamp
+that *does* state its own zone is trusted as sent rather than overridden —
+the vendor already uses a zoned format elsewhere, so the device row acquiring an
+offset one day is a realistic change.
 
 `deviceId` can be **null** on a half-provisioned bowl (VERIFIED — a row that
 exists in the account but has never completed setup). Skip such rows; there is
@@ -862,6 +922,34 @@ rather than a fixed threshold. It fires from a server-side job at local midnight
 (§2), which is consistent with a daily rollup, but the comparison itself has not
 been observed.
 
+### Considered and DECLINED: numeric alert counters
+
+A proposal to add numeric counters — `sensor.<bowl>_alerts_today` and friends,
+as `TOTAL_INCREASING` — so that fault history lands in Home Assistant's
+long-term statistics. **Declined**, and recorded here rather than dropped,
+because the argument for it is a real one and will come back.
+
+The reasoning for declining:
+
+- It is speculative feature design, not an observed defect. Nothing is broken
+  today; this answers a question somebody might ask.
+- It adds entities to **every** installation to answer one user's question. The
+  integration already creates 33 entities per bowl.
+- A user who wants long-term fault history can have it today, on their side,
+  with a `recorder:` include on the alert entities. That is a two-line change in
+  their own configuration and it costs nobody else anything.
+
+The argument **for** it, stated plainly so a revisit starts from the strongest
+form: a numeric sensor carrying a state class is the **only** route Home
+Assistant offers into permanent statistics. The recorder's default purge keeps
+raw state history for ten days; long-term statistics are kept indefinitely, and
+they are computed only from numeric states with a state class. So a binary fault
+— which is what every alert here is — has *no* path into permanent history
+except by being counted into a number. A `recorder:` include extends how long
+the raw rows survive; it does not make them statistics. If long-term fault
+history is ever a requirement rather than a nice-to-have, this is the only way
+to get it, and the entity count is the price.
+
 ### Deduplication
 
 Notify rows carry a stable `id` (VERIFIED). Use it.
@@ -912,7 +1000,6 @@ Stated so nobody mistakes silence for absence of doubt:
 - The meaning of `controlStatus` on the device row.
 - The meaning of `config` (an int) on the notify config object.
 - Which of `notifyItems` / `notifyList` `saveConfig` actually reads.
-- The zone of `onlineTime` / `offlineTime`.
 - The exact drinking-log range threshold at which the response becomes empty.
 - What `602` means, beyond "not authenticated".
 - The binary protocol on port 9557, in its entirety.
@@ -921,6 +1008,12 @@ Stated so nobody mistakes silence for absence of doubt:
   trip it; nothing narrower has been measured.
 - Whether `603` is one overloaded code or a broader "temporarily unavailable"
   — `/app/ota/check` and `/app/pay/get/product` (no subscription) both answer it.
+
+**Resolved since this list was written**, recorded so nobody re-opens it: the
+zone of `onlineTime` / `offlineTime` (and of `createTime` / `updateTime`). It is
+UTC — measured three ways on 2026-09-17, including the negative result that
+these fields do not move with the signed `timeZone`. See §3.3, "The device row's
+naive datetimes are UTC".
 
 ---
 
