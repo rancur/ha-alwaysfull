@@ -4,7 +4,29 @@ from __future__ import annotations
 
 
 class AlwaysFullError(Exception):
-    """Base error."""
+    """Base error, optionally carrying the vendor's own envelope code.
+
+    `code` is the `code` field of the vendor's `{code, msg, data}`
+    envelope, as a string, and it is `None` for anything this integration
+    raised itself (a transport failure, a refusal of our own).
+
+    It exists because the code was being THROWN AWAY. The vendor's `msg`
+    is free prose that changes between endpoints and firmware versions --
+    "The setup failed." was what a live install saw -- so the code is the
+    only part of a vendor refusal that anyone can look up, compare between
+    reports or search an issue tracker for. Carrying it on the exception
+    is what lets the user-facing message quote both without `api.py`
+    formatting a sentence for a user it knows nothing about.
+
+    Keyword-only, so every existing `AlwaysFullError("some message")` is
+    unchanged and a code is never supplied by accident in the position of
+    a message.
+    """
+
+    def __init__(self, *args: object, code: str | None = None) -> None:
+        """Store the vendor's envelope code alongside the usual message."""
+        super().__init__(*args)
+        self.code = code
 
 
 class AlwaysFullAuthError(AlwaysFullError):

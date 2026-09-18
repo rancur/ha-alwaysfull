@@ -446,6 +446,28 @@ Params: `deviceId`. Returns the writable configuration:
 | `deviceType` | `setType` (not a config group) | inverted enum — §4 | VERIFIED |
 | `headLength`, `bodyLength`, `seq`, `msgCode` | — | **not state, ignore** — §8 | VERIFIED |
 
+**Sleep mode suppresses FLUSHING, not the pump. VERIFIED.** The vendor states
+it identically in two places — the user guide at
+`alwaysfull.com/blogs/guide/user-guide` and the FAQ at
+`alwaysfull.com/pages/resources-faq` — as *"Sleep mode, do not flush between
+user-defined hours."* Refills continue normally.
+
+Corroborated on live hardware 2026-09-17, sleep mode on with a 17:00–19:30
+window: the bowl logged a genuine refill at 17:43 local (vendor alert
+`Operation_Confirmation`, *"is filling"*) and no flush occurred across the
+whole window. Refills through, flushes absent — exactly what the vendor
+documents.
+
+**"Sleep mode stops the pump" is WRONG**, and it is the intuitive reading, so
+it is stated here explicitly. A bowl in its sleep window will still top itself
+up, and will still make the noise that goes with it.
+
+Both vendor pages also gate **flush-schedule customisation and sleep mode
+behind the paid subscription tier**. The server accepts and stores these
+writes regardless of tier, and nothing in the API reports pump or flush
+activity, so from the API alone an *applied* setting and a *stored but
+ignored* one are indistinguishable. See §11.
+
 **Filter capacity is read as `capacity` and written as `filterCapacity`.**
 VERIFIED. Same value, different wire name depending on direction. A
 read-modify-write that echoes back `capacity` silently fails to set anything.
@@ -492,6 +514,41 @@ Three more rules, all VERIFIED:
   about **twenty seconds** later. A client that re-reads straight after a write
   and displays the result will show the user their change reverting. Trust the
   value you sent until the next scheduled poll.
+- **A write that ANSWERS AN ERROR may still have been applied.** VERIFIED on
+  the live bowl 2026-09-17. A `flushConfig` write answered envelope `msg`
+  `"The setup failed."` (an `httpx.ReadTimeout` on a preceding request in the
+  same session), the integration correctly surfaced it as a failure and did
+  not retry — and the bowl's `fillWashState` went to `0` anyway, seven seconds
+  later, and held across roughly eight subsequent polls. The server stored it.
+
+  So `"The setup failed."` does **not** mean "nothing changed". Treat it as
+  *unknown*, not as *failed*. This matters most for read-modify-write callers
+  and for any automation that snapshots state and restores it afterwards: a
+  snapshot taken after an "unsuccessful" write can capture the value the write
+  actually installed, and then faithfully restore the wrong thing. If you need
+  to know, wait for the next poll rather than trusting the envelope.
+
+  A later `sleepConfig` write on the same account succeeded normally, so this
+  was not a dead session or a rate limit — `603` is the rate limit (§1.4) and
+  says so plainly.
+
+  The mechanism is **not known**. An earlier write-up of this finding said the
+  vendor's cloud had accepted the request and failed to push it down to the
+  bowl; that was a guess, and the measurement contradicts it — the value
+  landed seven seconds later and stayed. It is recorded here as removed rather
+  than quietly dropped, because an authoritative-sounding wrong mechanism is
+  worse than an honest unknown.
+
+  **What this integration does about it (0.3.2).** A failed write no longer
+  claims the setting is untouched. The user is told an error came back, with
+  the vendor's code and its own words, that whether the change took effect is
+  not known, and that repeating it is safe — these writes send a whole config
+  object, so a repeat is idempotent. It also stops trusting its own cache: a
+  failed write requests a coordinator refresh, so the entity reconciles
+  against the device instead of showing a value it cannot vouch for until the
+  next scheduled poll. What it does **not** do is apply the value the user
+  asked for, because "unknown" cuts both ways. See
+  `entity.UNKNOWN_OUTCOME` and `entity.async_send_write`.
 
 ### 3.5 Drinking log
 
@@ -840,6 +897,18 @@ deliberately hidden ones. Nothing in the app suggests which.
 
 Stated so nobody mistakes silence for absence of doubt:
 
+- **Whether the DEVICE honours a flush-schedule or sleep write it accepted.**
+  The vendor gates flush-schedule customisation and sleep mode behind its paid
+  tier (§3.3, "Sleep mode"), and the server takes these writes either way. So
+  a stored setting is not evidence of an applied setting, and the API cannot
+  tell the two apart: nothing in it reports pump or flush activity, and
+  `device/config` reads back what the server *stored*, not what the bowl is
+  *doing*. One observation says the device did honour it — sleep mode
+  suppressed flushing on the live bowl during the 2026-09-17 window described
+  in §3.3 — and that is one setting, on one account, on one evening. Not proof
+  that every gated setting is honoured. There is no way to work around this;
+  it is stated so that a user whose flush schedule appears to do nothing knows
+  where to look.
 - The meaning of `controlStatus` on the device row.
 - The meaning of `config` (an int) on the notify config object.
 - Which of `notifyItems` / `notifyList` `saveConfig` actually reads.
