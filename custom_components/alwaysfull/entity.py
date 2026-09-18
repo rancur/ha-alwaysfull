@@ -11,8 +11,8 @@ Three bases live here:
 The write bases exist so that the five write platforms cannot each invent
 their own answer to the same three questions: how a whole-object
 read-modify-write is assembled, what a failed write looks like to the
-user, and what happens afterwards so the UI does not bounce back to the
-old value.
+user (and what it must not claim -- see `UNKNOWN_OUTCOME`), and what
+happens afterwards so the UI does not bounce back to the old value.
 """
 
 from __future__ import annotations
@@ -30,7 +30,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, LOGGER, MANUFACTURER
 from .coordinator import CREDENTIALS_REJECTED_MESSAGE, AlwaysFullCoordinator
-from .exceptions import AlwaysFullAuthError, AlwaysFullCredentialsError, AlwaysFullError
+from .exceptions import (
+    AlwaysFullAuthError,
+    AlwaysFullCredentialsError,
+    AlwaysFullError,
+    AlwaysFullRateLimitError,
+    AlwaysFullReloginThrottledError,
+)
 from .models import device_label
 
 if TYPE_CHECKING:
@@ -49,10 +55,133 @@ if TYPE_CHECKING:
 # offer them a firmware version or an area.
 ACCOUNT_DEVICE_NAME = "Always Full account"
 
-# Everything a write can fail with, mapped to one readable error. A cloud
-# API that is down, slow, rate-limiting or refusing the value are all the
-# same thing from the user's chair: the change did not happen.
+# Everything a write can fail with. They are NOT all the same thing from
+# the user's chair -- see `_write_failure_message`, which is the whole
+# point of this tuple being wider than one class.
 WRITE_FAILURES = (AlwaysFullError, TimeoutError, aiohttp.ClientError)
+
+# What the account-level write names itself in a failure message. There is
+# no bowl to name on that path: `notify/saveConfig` takes no device id and
+# changes the setting for every bowl at once.
+ACCOUNT_SUBJECT = "the notification settings"
+
+# THE SENTENCE THIS WHOLE MODULE EXISTS TO GET RIGHT.
+#
+# The obvious thing to tell someone whose write failed is that their
+# setting is untouched. It is what they most want to know, it is what the
+# integration's own behaviour suggests -- the optimistic value is applied
+# only on success -- and IT IS NOT TRUE.
+#
+# Measured on live hardware 2026-09-17 and written up in
+# `docs/VENDOR-API.md`: a `flushConfig` write answered `"The setup
+# failed."`, and the vendor's stored `fillWashState` moved to the
+# requested value seven seconds later and held across roughly eight polls.
+# The error came back and the change landed anyway. An error from this
+# vendor means the outcome is UNKNOWN -- not that the write was refused.
+#
+# Saying "nothing was changed" here would be worse than the vague message
+# it replaces, because people act on it: the same wrong belief, held by a
+# caller that snapshots state and restores it later, restores the value
+# the "failed" write actually installed. That happened while this was
+# being investigated.
+#
+# So the message says what is known (an error came back, with the vendor's
+# code and its own words), what is not known (whether the bowl took it),
+# what Home Assistant is doing about it (re-reading, see
+# `async_send_write`) and what is safe to do (repeat it -- every write
+# here sends a whole config object, so a second identical write cannot
+# compound the first).
+UNKNOWN_OUTCOME = (
+    "Whether the change took effect is not known, so Home Assistant is re-reading the "
+    "setting rather than assuming either way. Check its value before acting on it; "
+    "repeating the change is safe."
+)
+
+
+def _failure_detail(err: Exception) -> str:
+    """Render one failure as the diagnosable half of a message.
+
+    The vendor's envelope code and its `msg` together, when there is a
+    code; the message alone when there is not (a transport failure, or a
+    refusal of our own). Quoted, so a reader can see where the vendor's
+    prose starts and stops -- "The setup failed." reads like our sentence
+    otherwise.
+
+    `TimeoutError` gets a phrase because it carries NO message at all:
+    `str(TimeoutError())` is the empty string, and the obvious
+    interpolation produces a message with a hole in it. Anything else that
+    is somehow empty falls back to its class name, which at least names
+    the failure.
+
+    Nothing secret can arrive here. The token, the `sign` header and the
+    password are never placed in an exception message (see `api.py`), and
+    the device id is not in one either -- the bowl is named by
+    `device_label`, from the caller.
+    """
+    code = getattr(err, "code", None)
+    text = str(err).strip()
+    if not text:
+        text = "the request timed out" if isinstance(err, TimeoutError) else type(err).__name__
+    if code:
+        return f'code {code}: "{text}"'
+    return text
+
+
+def _write_failure_message(err: Exception, subject: str) -> str:
+    """Say what is known about a failed write, and nothing more.
+
+    A decision table, and the line it draws is between failures we can be
+    DEFINITE about and failures we cannot:
+
+    | Failure                         | What the user is told            |
+    | ------------------------------- | -------------------------------- |
+    | rate limit (603, or HTTP 429)   | nothing was changed -- definite  |
+    | re-login budget spent           | outcome not known                |
+    | any other vendor code + `msg`   | outcome not known                |
+    | timeout, connection error       | outcome not known                |
+
+    The rate limit is the only definite one, and it is definite for a
+    reason rather than by choice: `603` is refused at the gate, before the
+    request is processed at all (see `const.CODE_RATE_LIMITED`). There is
+    no path from "refused for talking too often" to a stored setting, so
+    "nothing was changed" is knowledge here and the user should have it
+    plainly -- a message that hedges every case is as useless as one that
+    claims every case.
+
+    Everything else is unknown, and each for its own reason. An arbitrary
+    vendor error is unknown because `"The setup failed."` has been
+    OBSERVED applying (see `UNKNOWN_OUTCOME`). A timeout or a connection
+    error is unknown because no answer came back at all: the request may
+    have been delivered and processed with only the reply lost, which is
+    the same situation seen from further away.
+
+    An authentication failure does not arrive here at all when it means
+    the stored credentials are wrong -- `async_send_write` routes that to
+    reauth, where a human can fix it.
+    """
+    detail = _failure_detail(err)
+    if isinstance(err, AlwaysFullRateLimitError):
+        return (
+            f"Always Full is limiting how often this account may be used, so the change to "
+            f"{subject} was refused before it reached the bowl ({detail}). Nothing was "
+            "changed. Wait a minute and try again."
+        )
+    if isinstance(err, AlwaysFullReloginThrottledError):
+        # Our own refusal, not the vendor's, so its long internal
+        # explanation is not quoted at the user -- but the write that
+        # preceded it WAS sent and refused for its session, and a session
+        # refusal is not one of the things measurement has settled. So it
+        # takes the unknown ending like the rest.
+        opening = (
+            f"Always Full rejected this Home Assistant session while changing {subject}, and "
+            "Home Assistant is not signing in again just yet (something else may be signed "
+            "in to the same Always Full account)"
+        )
+    elif isinstance(err, AlwaysFullError):
+        opening = f"Always Full returned an error while changing {subject} ({detail})"
+    else:
+        opening = f"Home Assistant could not reach Always Full to change {subject} ({detail})"
+    return f"{opening}. {UNKNOWN_OUTCOME}"
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -112,8 +241,20 @@ LOG_GROUP = ConfigGroup(
 async def async_send_write(
     coordinator: AlwaysFullCoordinator,
     action: Callable[[], Awaitable[Any]],
+    *,
+    subject: str,
+    reconcile: Callable[[], Awaitable[Any]],
 ) -> None:
     """Run one vendor write, recovering ONCE from a token rejected mid-session.
+
+    `subject` is what the write is changing, in the words a user should see
+    -- a bowl's `device_label`, or `ACCOUNT_SUBJECT`. It is never the
+    vendor's device id: that id is the bowl's MAC address.
+
+    `reconcile` is what to do with the cache when the write fails, and it
+    is required rather than defaulted because the right answer differs per
+    path and a default would silently give the account path the bowl
+    path's answer.
 
     The write path gets exactly the recovery the poll path has had all
     along, and for the same reason: the vendor is SINGLE-SESSION. Logging
@@ -165,6 +306,24 @@ async def async_send_write(
     Nothing here logs or raises a token value, a password or a `sign`
     header. The vendor's own message ("token expiration") is a description,
     not a secret.
+
+    WHAT A FAILURE DOES TO THE CACHE. A failed write requests a
+    reconciliation, and that is not tidiness: this vendor has been measured
+    answering an error and applying the write anyway (see
+    `UNKNOWN_OUTCOME`). Home Assistant is therefore showing a value it can
+    no longer vouch for, and leaving it standing until the next scheduled
+    poll -- up to a whole interval away -- means the entity may disagree
+    with the bowl for minutes with nothing to suggest it.
+
+    Reconciling is NOT applying the optimistic value. "Unknown" cuts both
+    ways: we may not claim the change was refused, and we may not claim it
+    was taken. The refusal is to keep trusting the cache, nothing more, and
+    the value the user asked for is still discarded.
+
+    It happens before the raise so a user who reads the message and looks
+    at the entity finds the re-read already under way, and it is skipped
+    for the reauth path, where the entities go unavailable anyway and the
+    request would only be spent failing.
     """
     try:
         try:
@@ -190,8 +349,8 @@ async def async_send_write(
         coordinator.config_entry.async_start_reauth_if_available(coordinator.hass)
         raise ConfigEntryAuthFailed(CREDENTIALS_REJECTED_MESSAGE) from err
     except WRITE_FAILURES as err:
-        msg = f"Always Full could not apply the change: {err}"
-        raise HomeAssistantError(msg) from err
+        await reconcile()
+        raise HomeAssistantError(_write_failure_message(err, subject)) from err
 
 
 def _reject_partial_group(payload: dict[str, Any]) -> None:
@@ -458,7 +617,18 @@ class AlwaysFullWriteEntity(AlwaysFullEntity):
         session on a vendor that allows only one.
         """
         async with self.coordinator.write_lock:
-            await async_send_write(self.coordinator, action)
+            await async_send_write(
+                self.coordinator,
+                action,
+                subject=device_label(self._device_id),
+                # A debounced poll, not an immediate read: the vendor's own
+                # config read is stale for about twenty seconds after a
+                # write (see `async_refresh_after_write`), so reading it
+                # instantly would reconcile against a known-stale answer,
+                # and a failing account is the last one to spend an extra
+                # request per rejected write on.
+                reconcile=self.coordinator.async_request_refresh,
+            )
             await self.coordinator.async_refresh_after_write(self._device_id, config)
 
     def _require_bowl(self) -> BowlData:
@@ -547,6 +717,14 @@ class AlwaysFullAccountEntity(CoordinatorEntity[AlwaysFullCoordinator]):
             await async_send_write(
                 self.coordinator,
                 lambda: self.coordinator.client.save_notify_config(updated),
+                subject=ACCOUNT_SUBJECT,
+                # The notification object, NOT a device poll: a device poll
+                # does not re-read `notify/getConfig`, which is fetched
+                # once every `NOTIFY_CONFIG_EVERY_N_POLLS` cycles. Given
+                # the same reconcile as the bowls, a notification switch
+                # could sit on a value the failed save may have changed for
+                # ten poll intervals.
+                reconcile=self.coordinator.async_refresh_notify_config,
             )
             await self.coordinator.async_refresh_notify_config()
 

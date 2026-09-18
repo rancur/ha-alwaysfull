@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
+import aiohttp
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityDescription
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.alwaysfull import PLATFORMS
-from custom_components.alwaysfull.const import DOMAIN, RELOGIN_MAX_ATTEMPTS
+from custom_components.alwaysfull.const import DOMAIN, RELOGIN_MAX_ATTEMPTS, SIGN_SECRET
 from custom_components.alwaysfull.entity import (
     FILTER_GROUP,
     FLUSH_GROUP,
@@ -31,6 +37,7 @@ from custom_components.alwaysfull.exceptions import (
     AlwaysFullCredentialsError,
     AlwaysFullRateLimitError,
 )
+from custom_components.alwaysfull.models import device_label
 from custom_components.alwaysfull.switch import NOTIFY_SWITCHES
 
 from .conftest import (
@@ -408,7 +415,11 @@ async def test_write_that_fails_auth_twice_surfaces_a_readable_error(
     with pytest.raises(HomeAssistantError) as err:
         await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
 
-    assert "could not apply the change" in str(err.value)
+    # A session refused twice is not one of the cases measurement has
+    # settled, so the message carries the vendor's words and claims
+    # nothing about what the bowl did with the write.
+    assert "token expiration" in str(err.value)
+    assert "not known" in str(err.value)
     assert len(mock_api.login_calls) == 1
     assert len(mock_api.writes) == 2
 
@@ -480,7 +491,9 @@ async def test_write_rate_limit_is_never_an_auth_failure(
         await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
 
     assert not isinstance(err.value, ConfigEntryAuthFailed)
-    assert "could not apply the change" in str(err.value)
+    # Refused at the gate, so this is the one class where the user is told
+    # outright that their setting is untouched.
+    assert "Nothing was changed" in str(err.value)
     assert mock_api.login_calls == []
     assert len(mock_api.writes) == 1
 
@@ -513,7 +526,7 @@ async def test_a_write_shares_the_polls_relogin_budget(
         await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
 
     assert not isinstance(err.value, ConfigEntryAuthFailed)
-    assert "could not apply the change" in str(err.value)
+    assert "not signing in again just yet" in str(err.value)
     assert len(mock_api.login_calls) == RELOGIN_MAX_ATTEMPTS
     # Attempted once and not retried: the retry is what the re-login was
     # for, and the re-login did not happen.
@@ -543,3 +556,247 @@ async def test_the_account_write_path_recovers_the_same_way(
         "save_notify_config",
         "save_notify_config",
     ]
+
+
+# -- What a failed write TELLS the user ------------------------------------
+#
+# A live install turned a switch off, the write failed, and the user was
+# shown "Always Full could not apply the change: The setup failed." --
+# the vendor's own `msg`, passed through with nothing added. It says
+# nothing about what state their bowl is in, what to do next, or what to
+# put in a bug report, and the vendor's envelope CODE never reached them
+# at all.
+#
+# The correction is not "say it failed more clearly". It is that we do not
+# know that it failed. Measured on the live bowl on 2026-09-17 and written
+# up in `docs/VENDOR-API.md`: a `flushConfig` write answered "The setup
+# failed." and the vendor's stored `fillWashState` moved to the requested
+# value seven seconds later and held. THE ERROR CAME BACK AND THE CHANGE
+# LANDED ANYWAY.
+#
+# So these tests pin the distinction that matters, and pin it in both
+# directions, because a message that hedges everything is as useless as one
+# that claims everything:
+#
+# | Failure                       | What the user is told                |
+# | ----------------------------- | ------------------------------------ |
+# | rate limit (603 / HTTP 429)   | nothing was changed -- DEFINITE      |
+# | timeout, connection error     | outcome not known                    |
+# | any other vendor code + msg   | outcome not known                    |
+#
+# The rate limit is the only one that is definite, and it is definite
+# because the request was refused before it reached the bowl. Everything
+# else either never got an answer or got an answer that has been PROVED not
+# to mean what it says.
+
+
+async def _failed_write_message(
+    entity: AlwaysFullWriteEntity,
+    mock_api: FakeAlwaysFullClient,
+    error: Exception,
+) -> str:
+    """Fail every write with `error` and return what the user is shown."""
+    mock_api.fail_writes(error)
+    with pytest.raises(HomeAssistantError) as err:
+        await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+    return str(err.value)
+
+
+async def test_a_rate_limited_write_says_plainly_that_nothing_changed(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """603 is refused at the gate, so this is the one case we can be definite about.
+
+    The vendor's rate limit is answered before the request is processed --
+    it is the documented meaning of the code, and it is the only failure
+    class here where "your setting is untouched" is something we actually
+    know. Hedging it would be as wrong as claiming it elsewhere.
+    """
+    entity = await _write_entity(hass)
+
+    message = await _failed_write_message(
+        entity, mock_api, await vendor_error("603", msg="Too many requests, please try again later.")
+    )
+
+    assert "Nothing was changed" in message
+    # The code and the vendor's own words, so a bug report carries both.
+    assert "603" in message
+    assert "Too many requests, please try again later." in message
+    assert "try again" in message
+    # NOT hedged: this is the case we can be definite about.
+    assert "not known" not in message
+
+
+async def test_a_connection_failure_does_not_claim_the_change_failed(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """We never saw an answer, so the request may well have been delivered."""
+    entity = await _write_entity(hass)
+
+    message = await _failed_write_message(
+        entity, mock_api, aiohttp.ClientConnectionError("Cannot connect to host")
+    )
+
+    assert "not known" in message
+    assert "Nothing was changed" not in message
+    assert "Cannot connect to host" in message
+    assert "safe" in message
+
+
+async def test_a_timed_out_write_does_not_claim_the_change_failed(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A timeout is the strongest case of all for "unknown".
+
+    The request was sent and no answer came back; that is precisely the
+    shape of a write the vendor processed and did not get to report on.
+    `TimeoutError()` carries no message at all, so the detail has to be
+    supplied rather than interpolated from an empty string.
+    """
+    entity = await _write_entity(hass)
+
+    message = await _failed_write_message(entity, mock_api, TimeoutError())
+
+    assert "not known" in message
+    assert "timed out" in message
+    assert "Nothing was changed" not in message
+
+
+async def test_an_arbitrary_vendor_error_carries_its_code_and_its_own_words(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """THE REPORTED CASE, verbatim: "The setup failed." under an unknown code.
+
+    The error is built by the REAL client from a real envelope, so this
+    asserts the whole chain: the code survives `api._handle_response`, it
+    reaches the exception, and it reaches the person reading the toast.
+    A message built from `str(err)` alone cannot pass this.
+    """
+    entity = await _write_entity(hass)
+
+    message = await _failed_write_message(
+        entity, mock_api, await vendor_error("500", msg="The setup failed.")
+    )
+
+    assert "The setup failed." in message
+    assert "500" in message
+    # Neither claim is available to us, and the second one is the one the
+    # live bowl disproved.
+    assert "not known" in message
+    assert "Nothing was changed" not in message
+    # Whole-object writes are idempotent, so a repeat cannot compound this.
+    assert "safe" in message
+
+
+async def test_no_write_failure_message_carries_a_secret(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Every class of failure, checked for the four things that must never leak.
+
+    The device id is the bowl's MAC address. It is checked here because the
+    obvious way to write these messages -- naming the bowl -- is also the
+    way it gets published, and `device_label` exists precisely so a message
+    CAN name the bowl. So the label is asserted present as well: a message
+    that named nothing would pass the negative half of this test while
+    being useless with two bowls on the account.
+    """
+    entity = await _write_entity(hass)
+    errors: list[Exception] = [
+        await vendor_error("603", msg="Too many requests, please try again later."),
+        await vendor_error("500", msg="The setup failed."),
+        aiohttp.ClientConnectionError("Cannot connect to host"),
+        TimeoutError(),
+    ]
+
+    for error in errors:
+        message = await _failed_write_message(entity, mock_api, error)
+
+        assert DEVICE_ID not in message
+        assert SIGN_SECRET not in message
+        assert "FRESH-TOKEN" not in message
+        assert "password" not in message.lower()
+        assert device_label(DEVICE_ID) in message
+
+
+async def test_a_failed_write_re_reads_the_bowl_instead_of_trusting_the_cache(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """A write that LOOKS failed may have applied, so the cache stops being trusted.
+
+    This is the behavioural half of the same finding. Home Assistant is
+    showing a value it can no longer vouch for -- the device may have taken
+    the change the error appeared to refuse -- so the cached value must be
+    reconciled against the device rather than left standing until the next
+    scheduled poll, up to a whole interval away.
+
+    Eleven seconds, and the poll interval is sixty: long enough for the
+    request-refresh debouncer to fire, far short of the scheduled poll. So
+    the extra read can only have come from the failure.
+    """
+    entity = await _write_entity(hass)
+    mock_api.fail_writes(await vendor_error("500", msg="The setup failed."))
+    before = mock_api.device_list_calls
+
+    with pytest.raises(HomeAssistantError):
+        await entity.async_write_config(FLUSH_GROUP, lambda _config: None)
+
+    freezer.tick(timedelta(seconds=11))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert mock_api.device_list_calls == before + 1
+
+
+async def test_a_failed_write_still_does_not_publish_what_the_user_asked_for(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """Re-reading is NOT the same as applying it optimistically.
+
+    "The outcome is unknown" cuts both ways: we may not claim the change
+    was refused, and we equally may not claim it was taken. The cache keeps
+    the last value the vendor actually reported until a poll replaces it.
+    """
+    entity = await _write_entity(hass)
+    coordinator = entity.coordinator
+    before = coordinator.data[DEVICE_ID].config.flush_interval_minutes
+    mock_api.fail_writes(await vendor_error("500", msg="The setup failed."))
+
+    def _mutate(config: Any) -> None:
+        config.flush_interval_minutes = before + 5
+
+    with pytest.raises(HomeAssistantError):
+        await entity.async_write_config(FLUSH_GROUP, _mutate)
+
+    assert coordinator.data[DEVICE_ID].config.flush_interval_minutes == before
+
+
+async def test_the_account_write_path_reports_a_failure_the_same_way(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """`notify/saveConfig` is a write too, and it fails the same way.
+
+    A separate method on a separate base: a message fixed only on
+    `AlwaysFullWriteEntity` would leave the notification switches saying
+    "The setup failed." and nothing else, which is where this started.
+    """
+    entry = await _load(hass)
+    entity = AlwaysFullAccountEntity(entry.runtime_data, DESCRIPTION)
+    mock_api.fail_writes(await vendor_error("500", msg="The setup failed."))
+    before = mock_api.notify_config_calls
+
+    with pytest.raises(HomeAssistantError) as err:
+        await entity.async_save_notify_config(lambda _config: None)
+
+    # Reconciled against the NOTIFICATION object, which is the one a failed
+    # save may have changed. A device poll would re-read every bowl and
+    # leave this switch on its pre-write value for up to ten poll
+    # intervals, because `notify/getConfig` is fetched once every ten.
+    assert mock_api.notify_config_calls == before + 1
+
+    message = str(err.value)
+    assert "The setup failed." in message
+    assert "500" in message
+    assert "not known" in message
+    assert "Nothing was changed" not in message
+    # Named for what it is: there is no bowl to name on this path.
+    assert "notification settings" in message

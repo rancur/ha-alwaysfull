@@ -238,10 +238,11 @@ class AlwaysFullClient:
             # does not call, which we cannot distinguish from a genuine
             # rate limit and do not need to: both mean back off and retry.
             raise AlwaysFullRateLimitError(
-                payload.get("msg") or "Too many requests, please try again later"
+                payload.get("msg") or "Too many requests, please try again later",
+                code=code,
             )
         if code == CODE_TOKEN_EXPIRED:
-            raise AlwaysFullAuthError(payload.get("msg") or "Token expired")
+            raise AlwaysFullAuthError(payload.get("msg") or "Token expired", code=code)
         if code in CREDENTIAL_REJECTION_CODES:
             # THE SAME CODE MEANS TWO DIFFERENT THINGS, and which one it is
             # depends entirely on the endpoint that answered.
@@ -272,13 +273,17 @@ class AlwaysFullClient:
             # reaches the user.
             message = payload.get("msg") or "Invalid email address or password"
             if path == LOGIN_PATH:
-                raise AlwaysFullCredentialsError(message)
-            raise AlwaysFullAuthError(message)
+                raise AlwaysFullCredentialsError(message, code=code)
+            raise AlwaysFullAuthError(message, code=code)
 
         # Anything unclassified stays a plain error: guessing that an unknown
         # code means "bad credentials" would push users into a reauth flow
         # that cannot fix whatever actually went wrong.
-        raise AlwaysFullError(payload.get("msg") or f"Unexpected response code {code}")
+        # The code travels with the error, because for an UNCLASSIFIED code
+        # it is the only durable thing about the failure: the `msg` is the
+        # vendor's own prose ("The setup failed.") and means nothing to
+        # anyone reading a bug report without it.
+        raise AlwaysFullError(payload.get("msg") or f"Unexpected response code {code}", code=code)
 
     # -- Endpoint methods ---------------------------------------------------
     #

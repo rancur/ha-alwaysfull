@@ -227,12 +227,12 @@ device page.
 | Daily minimum water | number | 0–200,000, in the bowl's own unit |
 | Daily maximum water | number | 0–200,000, in the bowl's own unit |
 | Flush only after filling | switch | |
-| Sleep mode | switch | |
+| Sleep mode | switch | Stops the bowl **flushing** between **Sleep start** and **Sleep end**. It does not stop refills. |
 | Drinking log recording | switch | Turning this off stops **Water today** updating. |
 | Units | select | `ml` / `fl_oz` |
 | Bowl size | select | `9_inch` / `7_inch` |
-| Sleep start | time | |
-| Sleep end | time | |
+| Sleep start | time | When the no-flushing window begins, in the bowl's own local time. |
+| Sleep end | time | When it ends. A window that ends before it starts runs over midnight. |
 | Reset filter life | button | Press after fitting a new filter. |
 
 Daily minimum must be below daily maximum, or both must be exactly `0` to
@@ -419,6 +419,21 @@ alert** sensor and in the vendor's app.
 vendor assigns. A row without one cannot be deduplicated, and firing it would
 re-fire it on every poll for as long as it stayed on the page.
 
+**Sleep mode stops flushing, not refilling.** It is what the vendor's own
+documentation says — *"Sleep mode, do not flush between user-defined hours"* —
+and it was confirmed on real hardware: a bowl in its sleep window logged a
+refill and no flush. So a sleeping bowl can still make noise when it tops
+itself up. If you switched sleep mode on to get a quiet night, that is the part
+it does not do.
+
+**Flush scheduling and sleep mode are gated behind the vendor's paid tier.**
+Both settings can be written either way — the server accepts and stores them
+regardless — and nothing in the vendor's API reports whether the bowl is
+actually flushing, so there is no way to confirm from here that the device is
+honouring them. Check the behaviour rather than trusting the entity. On the one
+account this was tested on, sleep mode did take effect; that is one
+observation, not a guarantee about every gated setting.
+
 **Not everything in the app is exposed.** There are no OTA entities —
 `/app/ota/check` answers `603` on the live server, the same code the vendor
 uses to say "too many requests", so there is no usable OTA path either way —
@@ -495,10 +510,28 @@ for a wrong password and for an address with no account, so those two cases
 cannot be told apart. Sign in to the Always Full app with the same credentials
 to find out which it is.
 
-**A setting snaps back to its old value.** That is a refused write. The
-integration re-reads the bowl's config immediately after every write precisely
-so you see the truth rather than what you asked for. Check the log for the
-reason.
+**A setting snaps back to its old value.** The change went through, the
+integration showed you the value it sent, and then a later poll read something
+different back from the vendor — so what you are looking at is the vendor's own
+answer, not a display glitch. Either the write was stored and not applied, or
+something else changed it. Check the log, and see the entry below if you were
+shown a message at the time.
+
+**A setting did not take, and you saw a message from the bowl's service.**
+Nothing here is certain, and the message says so on purpose. **An error from
+this vendor does not mean your change was rejected.** It has been measured
+answering an error and applying the change anyway, seven seconds later — so the
+honest answer is that the outcome is not known, and the integration will not
+pretend otherwise in either direction. It does two things for you: it quotes
+the vendor's own code and wording, which is what to put in a bug report, and it
+re-reads the setting instead of leaving a value on screen it cannot vouch for.
+
+What to do: **wait a few seconds, look at the entity's current value, and set
+it again if it is not what you wanted.** Repeating it is safe — every setting is
+sent as a whole object, so making the same change twice cannot do anything the
+first one did not. Trying again shortly usually works. The exception is a
+message saying the account is being rate-limited: that one *was* refused before
+it reached the bowl, nothing was changed, and a minute's wait fixes it.
 
 **A switch reads `unknown`.** The vendor's answer did not carry that setting.
 It is reported as unknown rather than off on purpose: "off" would invite you to
