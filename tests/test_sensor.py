@@ -12,12 +12,16 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
-from pytest_homeassistant_custom_component.common import snapshot_platform
+from pytest_homeassistant_custom_component.common import (
+    mock_restore_cache_with_extra_data,
+    snapshot_platform,
+)
 from syrupy.assertion import SnapshotAssertion
 
 from custom_components.alwaysfull.const import ATTR_RAW_TYPE, UNKNOWN
@@ -26,6 +30,7 @@ from custom_components.alwaysfull.sensor import ATTR_RAW_SLAVE_TYPE, SENSORS
 
 from .conftest import (
     DEVICE_ID,
+    FROZEN_INSTANT,
     FakeAlwaysFullClient,
     bowl_data,
     device_row,
@@ -45,14 +50,22 @@ FILTER_USED = 184458
 FILTER_REMAINING_DAYS = (FILTER_CAN_USE - FILTER_USED) / 86400
 
 
-async def test_all_sensor_entities(
+async def test_all_sensor_entities(  # noqa: PLR0913, PLR0917 -- one fixture per concern
     hass: HomeAssistant,
     mock_api: FakeAlwaysFullClient,
     entity_registry: er.EntityRegistry,
     snapshot: SnapshotAssertion,
     enable_all_entities: None,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Entity ids, units, device classes and states are all pinned."""
+    """Entity ids, units, device classes and states are all pinned.
+
+    Frozen, because the lifetime total is the sum of every completed day
+    since the fixture bowl was registered and the fake answers one row per
+    history window, so on the real clock the pinned state would change
+    whenever the fixture bowl aged past another window.
+    """
+    freezer.move_to(FROZEN_INSTANT)
     entry = await setup_platform(hass, Platform.SENSOR)
     await snapshot_platform(hass, entity_registry, snapshot, entry.entry_id)
 
@@ -562,3 +575,157 @@ async def test_an_unparseable_stamp_is_unknown_and_does_not_break_the_update(
     assert connected is not None
     assert connected.state == STATE_UNKNOWN
     assert hass.states.get(f"{WALL}water_today").state == "1234"
+
+
+# -- Water lifetime, last drink, last refill ----------------------------------
+
+
+async def test_water_lifetime_is_history_plus_today_in_the_bowls_unit(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """One history window of 903 plus today's 903, published as a volume in the bowl's unit.
+
+    Frozen at an instant whose local day follows the fixture bowl's
+    registration day, so exactly one completed day is summed. See the
+    coordinator tests for the windowing itself.
+    """
+    freezer.move_to(FROZEN_INSTANT)
+    await setup_platform(hass, Platform.SENSOR)
+
+    wall = hass.states.get(f"{WALL}water_lifetime")
+    pump = hass.states.get(f"{PUMP}water_lifetime")
+    assert wall is not None
+    assert pump is not None
+    assert wall.state == "1806"
+    assert wall.attributes["unit_of_measurement"] == "mL"
+    assert wall.attributes["state_class"] == "total_increasing"
+    assert wall.attributes["device_class"] == SensorDeviceClass.VOLUME
+    assert float(pump.state) == pytest.approx(500 * 29.5735295625, abs=0.01)
+
+
+async def test_water_lifetime_is_unknown_without_a_registration_date(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """No `createTime`, no lifetime -- and never a smaller number presented as the whole."""
+    freezer.move_to(FROZEN_INSTANT)
+    row = device_row()
+    del row["createTime"]
+    mock_api.device_rows_override = [row]
+    await setup_platform(hass, Platform.SENSOR)
+
+    assert hass.states.get(f"{WALL}water_lifetime").state == STATE_UNKNOWN
+    assert hass.states.get(f"{WALL}water_today").state == "903"
+
+
+async def test_last_refill_is_the_newest_fill_alert_not_the_newest_alert(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A newer alert of another type does not move the refill stamp."""
+    rows = load_fixture_data("notify_log")["data"]
+    mock_api.notify_rows_override = [
+        {
+            "id": 9999,
+            "type": "Tilted",
+            "msg": "tilted",
+            "createTime": "2026-09-17T01:00:00Z",
+            "deviceId": DEVICE_ID,
+        },
+        # The newest fill in the capture, placed LAST so that an
+        # implementation reading `rows[0]` reports the wrong instant.
+        *reversed(rows),
+    ]
+    await setup_platform(hass, Platform.SENSOR)
+
+    state = hass.states.get(f"{WALL}last_refill")
+    assert state is not None
+    assert state.attributes["device_class"] == SensorDeviceClass.TIMESTAMP
+    assert state.state == "2026-09-16T23:35:36+00:00"
+
+
+async def test_last_refill_is_unknown_with_no_fill_on_the_page(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    mock_api.notify_rows_override = [
+        {"id": 1, "type": "Tilted", "msg": "tilted", "createTime": "2026-09-17T01:00:00Z"},
+        {"id": 2, "type": "Operation_Confirmation", "msg": "no stamp"},
+        {"id": 3, "type": "Operation_Confirmation", "msg": "naive", "createTime": "2026-09-17 01:00:00"},
+    ]
+    await setup_platform(hass, Platform.SENSOR)
+
+    assert hass.states.get(f"{WALL}last_refill").state == STATE_UNKNOWN
+
+
+async def test_last_drink_is_unknown_until_a_rise_is_seen_then_follows_it(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    freezer.move_to(FROZEN_INSTANT)
+    entry = await setup_platform(hass, Platform.SENSOR)
+    assert hass.states.get(f"{WALL}last_drink").state == STATE_UNKNOWN
+
+    freezer.tick(timedelta(minutes=1))
+    mock_api.drinking_totals[DEVICE_ID] = 950
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(f"{WALL}last_drink")
+    assert state.attributes["device_class"] == SensorDeviceClass.TIMESTAMP
+    assert state.state == "2026-09-16T18:01:00+00:00"
+
+
+async def test_last_drink_is_restored_across_a_restart_until_a_newer_one_is_seen(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """The vendor cannot supply this value again, so the entity keeps its own.
+
+    A restart would otherwise blank it until the pet next drinks -- which,
+    for the question "has she drunk recently?", is the worst possible
+    moment to have no answer.
+    """
+    freezer.move_to(FROZEN_INSTANT)
+    stored = "2026-09-16T10:00:00+00:00"
+    mock_restore_cache_with_extra_data(
+        hass,
+        (
+            (
+                State(f"{WALL}last_drink", stored),
+                {
+                    "native_value": {"__type": "<class 'datetime.datetime'>", "isoformat": stored},
+                    "native_unit_of_measurement": None,
+                },
+            ),
+        ),
+    )
+    entry = await setup_platform(hass, Platform.SENSOR)
+    assert hass.states.get(f"{WALL}last_drink").state == stored
+
+    freezer.tick(timedelta(minutes=1))
+    mock_api.drinking_totals[DEVICE_ID] = 950
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(f"{WALL}last_drink").state == "2026-09-16T18:01:00+00:00"
+
+
+async def test_only_an_observed_sensor_reads_its_stored_value_back(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+) -> None:
+    """A stored value for a sensor the vendor supplies is ignored; the vendor's answer wins."""
+    mock_restore_cache_with_extra_data(
+        hass,
+        (
+            (
+                State(f"{WALL}last_refill", "2001-01-01T00:00:00+00:00"),
+                {
+                    "native_value": {
+                        "__type": "<class 'datetime.datetime'>",
+                        "isoformat": "2001-01-01T00:00:00+00:00",
+                    },
+                    "native_unit_of_measurement": None,
+                },
+            ),
+        ),
+    )
+    mock_api.notify_rows_override = []
+    await setup_platform(hass, Platform.SENSOR)
+
+    assert hass.states.get(f"{WALL}last_refill").state == STATE_UNKNOWN

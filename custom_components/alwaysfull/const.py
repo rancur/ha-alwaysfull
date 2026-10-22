@@ -184,3 +184,44 @@ ALERT_OPTIONS = (*ALERT_TYPE_OPTIONS.values(), UNKNOWN)
 # vendor ships after this table was written is indistinguishable from no
 # alert at all.
 ATTR_RAW_TYPE = "raw_type"
+
+# The widest `drinking/log` window asked for in one request when the
+# coordinator catches up on a bowl's history for the lifetime total. The
+# vendor answers a window of roughly a year or more with an EMPTY array
+# rather than a truncated one (docs/VENDOR-API.md §7), so a single
+# "everything since the bowl was registered" request would read as a bowl
+# that has never been drunk from. Half a year keeps every chunk well
+# inside the cap; a two-year-old bowl costs four requests, once, at setup.
+HISTORY_CHUNK_DAYS = 180
+
+# The vendor's own `type` string for a routine fill, which is the only
+# alert that marks something the bowl DID rather than something wrong with
+# it. The last-refill sensor is built from it.
+FILL_ALERT_TYPE = "Operation_Confirmation"
+
+# How long one vendor request may take before it is abandoned. Measured on a
+# live install: a healthy poll of four requests completes in about five
+# seconds, while a hung `notify/getNotifyLog` sat for 60-70 seconds until
+# the vendor's own gateway gave up and answered with an HTML error page.
+# Waiting that long gains nothing -- the answer, when it finally comes, is
+# not JSON -- and it holds the whole poll, and every entity, hostage.
+REQUEST_TIMEOUT_SECONDS = 30
+
+# The notify log is the one endpoint with its own numbers, because it is the
+# one that has been measured misbehaving. Timed from outside Home Assistant
+# against a live account, with nothing else signed in:
+#
+#   pageSize 5:   14-58 s, every call answered
+#   pageSize 10:  60 s then HTTP 504, every call
+#   pageSize 20:  60 s then HTTP 504, every call
+#
+# So the page is small enough to be answered at all, its timeout is as long
+# as the vendor's own gateway allows minus a margin, and after a failure the
+# read is rested for a few polls: a query that takes the server a minute,
+# re-issued every minute, is one slow query held open on their side for
+# ever, which helps nobody. The event entity de-duplicates by row id, so a
+# shorter page costs nothing unless more than five alerts land between two
+# successful reads.
+NOTIFY_LOG_PAGE_SIZE = 5
+NOTIFY_LOG_TIMEOUT_SECONDS = 55
+NOTIFY_LOG_RETRY_AFTER_POLLS = 2

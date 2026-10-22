@@ -26,6 +26,7 @@ with no real I/O and no incompatible dependency.
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
 from typing import Any, Self
 
@@ -375,7 +376,9 @@ async def test_notify_log_sends_device_id_and_default_page_size():
     params = session.calls[0]["params"]
     assert params["deviceId"] == "aabbccddeeff"
     assert params["pageNum"] == "1"
-    assert params["pageSize"] == "20"
+    assert params["pageSize"] == "5"
+    # The one endpoint with its own, longer timeout; see NOTIFY_LOG_TIMEOUT_SECONDS.
+    assert session.calls[0]["timeout"].total == 55
     assert result == fixture["data"]
     assert result["totalSize"] == 13
 
@@ -524,3 +527,73 @@ async def test_reset_filter_uses_dev_no():
     body = session.calls[0]["json"]
     assert body["devNo"] == "aabbccddeeff"
     assert "deviceId" not in body
+
+
+# --- transport failures the vendor's gateway produces ---------------------
+
+
+class _FakeBadResponse:
+    """A response whose body is not JSON: what nginx sends for a gateway timeout."""
+
+    def __init__(self, status: int, body: str, content_type: str = "text/html") -> None:
+        self.status = status
+        self.headers = {"Content-Type": content_type}
+        self._body = body
+
+    async def json(self, content_type: str | None = None) -> Any:
+        msg = "unexpected character: line 1 column 1 (char 0)"
+        raise ValueError(msg)
+
+    async def text(self) -> str:
+        return self._body
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FakeBadSession:
+    def __init__(self, status: int, body: str) -> None:
+        self._status = status
+        self._body = body
+
+    def request(self, method: str, url: str, **kwargs: Any) -> _FakeBadResponse:
+        return _FakeBadResponse(self._status, self._body)
+
+
+@pytest.mark.asyncio
+async def test_every_request_carries_a_bounded_timeout():
+    """One hung vendor request must not be allowed to outlast the poll interval."""
+    client, session = _client()
+    await client.device_list()
+    timeout = session.calls[0]["timeout"]
+    assert timeout.total == 30
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_is_a_plain_error_named_by_its_status():
+    """A gateway timeout is reported as HTTP 504, never as a complaint about a `<`."""
+    client = AlwaysFullClient(_FakeBadSession(504, "<html><body>504 Gateway Time-out</body></html>"), token="tok")
+    with pytest.raises(AlwaysFullError, match="HTTP 504") as excinfo:
+        await client.notify_log("aabbccddeeff")
+    assert not isinstance(excinfo.value, AlwaysFullAuthError | AlwaysFullRateLimitError)
+
+
+@pytest.mark.asyncio
+async def test_a_non_json_200_is_a_plain_error_and_the_body_reaches_only_the_debug_log(
+    caplog: pytest.LogCaptureFixture,
+):
+    """The message says what came back; the body itself is kept for DEBUG."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.alwaysfull.api")
+    client = AlwaysFullClient(_FakeBadSession(200, "<html>Please sign in</html>"), token="SECRET-TOKEN")
+    with pytest.raises(AlwaysFullError, match=r"HTTP 200 .*not JSON") as excinfo:
+        await client.device_list()
+    assert not isinstance(excinfo.value, ValueError)
+    assert "SECRET-TOKEN" not in str(excinfo.value)
+
+    debug = [r for r in caplog.records if r.levelno == logging.DEBUG and "Non-JSON" in r.getMessage()]
+    assert len(debug) == 1
+    assert "Please sign in" in debug[0].getMessage()
+    assert "SECRET-TOKEN" not in debug[0].getMessage()

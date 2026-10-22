@@ -99,6 +99,11 @@ ALLOWED_EMAILS = {
         "handle, which is already public in the manifest's codeowners field. "
         "It is what GitHub issues INSTEAD of a real address."
     ),
+    "paradigmshift6@users.noreply.github.com": (
+        "GitHub's privacy address for a contributor's pseudonymous handle, "
+        "used as the author of that contributor's commits. Like the owner's "
+        "entry above, it is what GitHub issues INSTEAD of a real address."
+    ),
     # Historical only. Present in blobs that are already published and
     # cannot be removed without rewriting history and force-pushing.
     "u@e.com": (

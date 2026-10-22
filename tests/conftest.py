@@ -32,7 +32,7 @@ from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotEx
 from syrupy.assertion import SnapshotAssertion
 
 from custom_components.alwaysfull.api import AlwaysFullClient
-from custom_components.alwaysfull.const import DOMAIN
+from custom_components.alwaysfull.const import DOMAIN, NOTIFY_LOG_PAGE_SIZE
 from custom_components.alwaysfull.coordinator import BowlData
 from custom_components.alwaysfull.exceptions import AlwaysFullAuthError
 from custom_components.alwaysfull.models import BowlConfig, BowlState
@@ -227,6 +227,12 @@ class FakeAlwaysFullClient:
         # Injectable failures. `_remaining` of None means "raise forever".
         self.device_list_error: Exception | None = None
         self.device_list_error_remaining: int | None = None
+        # The same, for the two per-bowl SECONDARY reads, so a test can
+        # prove that one of them failing leaves the rest of the bowl live.
+        self.notify_log_error: Exception | None = None
+        self.notify_log_error_remaining: int | None = None
+        self.drinking_log_error: Exception | None = None
+        self.drinking_log_error_remaining: int | None = None
         self.login_error: Exception | None = None
         self.write_error: Exception | None = None
         self.write_error_remaining: int | None = None
@@ -263,6 +269,16 @@ class FakeAlwaysFullClient:
         """Make `device_list()` raise `error`, for `times` calls (None = forever)."""
         self.device_list_error = error
         self.device_list_error_remaining = times
+
+    def fail_notify_log(self, error: Exception, times: int | None = None) -> None:
+        """Make `notify_log()` raise `error`, for `times` calls (None = forever)."""
+        self.notify_log_error = error
+        self.notify_log_error_remaining = times
+
+    def fail_drinking_log(self, error: Exception, times: int | None = None) -> None:
+        """Make `drinking_log()` raise `error`, for `times` calls (None = forever)."""
+        self.drinking_log_error = error
+        self.drinking_log_error_remaining = times
 
     def fail_writes(self, error: Exception, times: int | None = None) -> None:
         """Make every writer raise `error`, for `times` calls (None = forever).
@@ -329,6 +345,10 @@ class FakeAlwaysFullClient:
         last row the server happened to send.
         """
         self.drinking_log_calls.append((device_id, units, start, end))
+        if self.drinking_log_error is not None and self.drinking_log_error_remaining != 0:
+            if self.drinking_log_error_remaining is not None:
+                self.drinking_log_error_remaining -= 1
+            raise self.drinking_log_error
         if self.drinking_rows_override is not None:
             return copy.deepcopy(self.drinking_rows_override)
         return [
@@ -336,7 +356,7 @@ class FakeAlwaysFullClient:
             {"drinkingDate": start, "totalCapacity": self.drinking_totals.get(device_id, 0)},
         ]
 
-    async def notify_log(self, device_id: str, page_size: int = 20) -> Any:
+    async def notify_log(self, device_id: str, page_size: int = NOTIFY_LOG_PAGE_SIZE) -> Any:
         """Return the paginated notification-log envelope from the fixtures.
 
         The committed capture is one device's log, and it is served for
@@ -346,6 +366,10 @@ class FakeAlwaysFullClient:
         to have its own alerts passes a `{device_id: rows}` mapping.
         """
         self.notify_log_calls.append(device_id)
+        if self.notify_log_error is not None and self.notify_log_error_remaining != 0:
+            if self.notify_log_error_remaining is not None:
+                self.notify_log_error_remaining -= 1
+            raise self.notify_log_error
         envelope = copy.deepcopy(load_fixture_data("notify_log"))
         override = self.notify_rows_override
         if isinstance(override, dict):

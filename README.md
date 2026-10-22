@@ -167,7 +167,7 @@ repair flow on its own.
 
 ## Entities
 
-Home Assistant creates **33 entities per bowl**, plus **12 account-level
+Home Assistant creates **36 entities per bowl**, plus **12 account-level
 entities** shared by every bowl on the account.
 
 ### Per bowl
@@ -177,6 +177,9 @@ entities** shared by every bowl on the account.
 | Entity | Notes |
 | --- | --- |
 | Water today | Total consumed today. `unknown` until the server has a row for today — never a fabricated `0`. |
+| Water lifetime | Every completed day since the bowl was registered, plus today. `total_increasing`, so Home Assistant's long-term statistics keep it as a meter for as long as the recorder runs. `unknown` if the vendor sends no registration date. See [the lifetime total](#the-lifetime-total) below. |
+| Last drink | When a poll first saw today's total rise — this integration's own observation, at the poll interval's resolution, because the vendor's log has no per-drink detail. Kept across restarts. `unknown` until the first rise is seen. See [last drink](#last-drink-and-last-refill). |
+| Last refill | When the bowl last reported a routine fill, from the vendor's own alert log. A fill follows the level dropping, so it usually trails a drink. `unknown` if no fill is on the vendor's page. |
 | Filter life | Percentage remaining. Wall unit only. |
 | Filter time remaining | Shown in days. Wall unit only. |
 | Water source | `wall_unit`, `bottle_pump`, `none` or `unknown`. Diagnostic. |
@@ -185,6 +188,37 @@ entities** shared by every bowl on the account.
 | Last connected | When the bowl last connected, as a real timestamp — Home Assistant shows it as relative time ("2 days ago"). Diagnostic. **Changed in 0.4.0**, see the note below. |
 | Last disconnected | When it last dropped off, as a real timestamp. `unknown` while it is connected — the vendor sends one of this pair at a time. Diagnostic. **Changed in 0.4.0.** |
 | Firmware version | Diagnostic, **disabled by default** — the device page already shows it. |
+
+#### The lifetime total
+
+**Water lifetime** is the sum of the vendor's daily drinking log from the day
+the bowl was registered through yesterday, plus today's reading. The history
+is read once, on the first poll after Home Assistant starts, in windows of at
+most 180 days (a window of a year or more comes back empty from the vendor,
+not truncated); after that, one extra request per bowl per day folds in the
+day that just completed. Days before the bowl existed are zero-filled by the
+server and add nothing. If the bowl's **Units** are changed, the sum is
+rebuilt in the new unit on the next poll.
+
+#### Last drink and last refill
+
+Neither is a field the vendor publishes, and they mean different things.
+
+**Last drink** is the moment this integration first saw **Water today** go up
+since the previous poll. The vendor's log carries daily totals only, so this
+is as close to "when did she last drink" as the API allows, and it is only as
+precise as the scan interval: at the default 60 seconds, a drink is noticed
+within a minute of the vendor's total moving. The first reading after a
+restart claims nothing — a total of 600 says the pet drank today, not when —
+so the entity keeps its last value across restarts and reports `unknown` only
+until the first rise it has ever seen. The first reading of a new day is
+compared against zero, not against yesterday's closing total.
+
+**Last refill** is read from the vendor's alert log: the newest routine-fill
+alert (`operation_confirmation`), stamped by the vendor in UTC. The bowl
+refills when its level drops, so a refill usually follows a drink, but it is
+a different event — a flush cycle can also end in a fill — and the two are
+reported separately rather than merged into one guess.
 
 > [!IMPORTANT]
 > **Breaking change in 0.4.0: the two connection times are now timestamps, not
@@ -404,6 +438,24 @@ integration, and none of it is going to change.
 comes from `app.alwaysfull.com`. If that is down, slow or rate-limiting, your
 entities go unavailable. There is no offline mode and no cached fallback,
 because a cached water total is a lie about your pet.
+
+One failing request no longer takes the whole bowl with it, though. The device
+list and the device config are what every entity is built from, and a failure
+there is an outage. The three other reads — today's drinking log, the drinking
+history behind **Water lifetime**, and the alert log — are readings: if one of
+them times out or comes back as an error page (the vendor's alert log has been
+seen hanging for a minute at a time), that reading is `unknown` for a poll,
+the alert entities keep the last page they saw, and everything else stays
+live. Every request is also abandoned after 30 seconds rather than waiting
+for the vendor's gateway to give up first.
+
+The alert log gets special handling, because it is the request that has been
+measured misbehaving: against a live account the vendor took 14–58 seconds to
+answer a five-row page and timed out outright on anything larger. So the
+integration asks for five rows, allows that one request 55 seconds, and after
+a failed read leaves the log alone for two polls before asking again. When
+the vendor is healthy nothing changes; when it is not, alerts can lag a few
+minutes rather than taking the bowl down with them.
 
 **There is no local control path. At all.** A full TCP scan of the device
 across all 65,535 ports found **zero open ports**. It is a Bouffalo Lab BL602

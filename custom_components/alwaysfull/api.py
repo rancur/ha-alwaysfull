@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+import aiohttp
 
 from .const import (
     API_BASE,
@@ -35,6 +38,9 @@ from .const import (
     CODE_TOKEN_EXPIRED,
     CREDENTIAL_REJECTION_CODES,
     LOGIN_PATH,
+    NOTIFY_LOG_PAGE_SIZE,
+    NOTIFY_LOG_TIMEOUT_SECONDS,
+    REQUEST_TIMEOUT_SECONDS,
     SIGN_SECRET,
 )
 from .exceptions import (
@@ -44,10 +50,14 @@ from .exceptions import (
     AlwaysFullRateLimitError,
 )
 
-if TYPE_CHECKING:
-    import aiohttp
+_LOGGER = logging.getLogger(__name__)
 
 _HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_SERVER_ERROR = 500
+# How much of a non-JSON body is kept for the debug log: enough to tell an
+# nginx "504 Gateway Time-out" page from a login wall, not enough to carry
+# anything a vendor error page would not already show anyone.
+_BODY_SNIPPET_CHARS = 120
 
 
 def _truncate_offset_to_hours(offset: timedelta) -> int:
@@ -158,12 +168,17 @@ class AlwaysFullClient:
         method: str,
         path: str,
         params: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> Any:
         """Make a signed request to ``path`` and return the envelope's ``data``.
 
         For ``GET`` the merged parameters are sent as the query string. For
         every other method they are sent as a JSON body. Either way they are
         also what gets signed.
+
+        ``timeout_seconds`` overrides `REQUEST_TIMEOUT_SECONDS` for the one
+        endpoint that has earned a longer leash; see `notify_log`.
         """
         if self._session is None:
             msg = "AlwaysFullClient has no aiohttp session configured"
@@ -193,16 +208,25 @@ class AlwaysFullClient:
 
         url = f"{API_BASE}{path}"
         method_upper = method.upper()
+        # Per request, not per session: the session is Home Assistant's
+        # shared one, and its default is generous enough to let one hung
+        # vendor request outlast the whole poll interval. See
+        # `REQUEST_TIMEOUT_SECONDS` for the measurement behind the number.
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds or REQUEST_TIMEOUT_SECONDS)
 
         if method_upper == "GET":
             query = {
                 key: value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
                 for key, value in merged.items()
             }
-            async with self._session.request(method_upper, url, headers=headers, params=query) as resp:
+            async with self._session.request(
+                method_upper, url, headers=headers, params=query, timeout=timeout
+            ) as resp:
                 return await self._handle_response(resp, path)
 
-        async with self._session.request(method_upper, url, headers=headers, json=merged) as resp:
+        async with self._session.request(
+            method_upper, url, headers=headers, json=merged, timeout=timeout
+        ) as resp:
             return await self._handle_response(resp, path)
 
     async def _handle_response(self, resp: aiohttp.ClientResponse, path: str) -> Any:
@@ -224,8 +248,28 @@ class AlwaysFullClient:
         if resp.status == _HTTP_TOO_MANY_REQUESTS:
             msg = "Server responded 429 Too Many Requests"
             raise AlwaysFullRateLimitError(msg)
+        if resp.status >= _HTTP_SERVER_ERROR:
+            # The vendor's gateway answering for a backend that did not:
+            # observed live as a 504 after 60-70 seconds, with an HTML
+            # body. Named as what it is, so the log says "HTTP 504" rather
+            # than complaining about the first character of an HTML page.
+            msg = f"Server responded HTTP {resp.status} to {path}"
+            raise AlwaysFullError(msg)
 
-        payload = await resp.json(content_type=None)
+        try:
+            payload = await resp.json(content_type=None)
+        except ValueError as err:
+            # Not JSON at all. The status and content type go in the
+            # message; a snippet of the body goes to the DEBUG log only,
+            # where it can say which error page the vendor served without
+            # putting its text into every user's default log.
+            content_type = resp.headers.get("Content-Type", "") if resp.headers else ""
+            await self._debug_log_body(resp, path)
+            msg = f"Server responded HTTP {resp.status} ({content_type or 'no content type'}) to {path}, not JSON"
+            raise AlwaysFullError(msg) from err
+        if not isinstance(payload, dict):
+            msg = f"Server responded to {path} with JSON that is not an object"
+            raise AlwaysFullError(msg)
         code = str(payload.get("code"))
 
         if code == CODE_OK:
@@ -284,6 +328,28 @@ class AlwaysFullClient:
         # vendor's own prose ("The setup failed.") and means nothing to
         # anyone reading a bug report without it.
         raise AlwaysFullError(payload.get("msg") or f"Unexpected response code {code}", code=code)
+
+    @staticmethod
+    async def _debug_log_body(resp: aiohttp.ClientResponse, path: str) -> None:
+        """Log the start of a non-JSON body at DEBUG, for the next bug report.
+
+        Best effort: a body that cannot be read is not a second error worth
+        raising over the first. Only the first `_BODY_SNIPPET_CHARS` are
+        kept, and the token never appears in a response body, so nothing
+        secret can reach the log by this route.
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        try:
+            body = await resp.text()
+        except (aiohttp.ClientError, UnicodeDecodeError, TimeoutError):
+            return
+        _LOGGER.debug(
+            "Non-JSON response from %s (HTTP %s): %r",
+            path,
+            resp.status,
+            body[:_BODY_SNIPPET_CHARS],
+        )
 
     # -- Endpoint methods ---------------------------------------------------
     #
@@ -386,10 +452,16 @@ class AlwaysFullClient:
         """
         return await self.request("POST", "/app/notify/saveConfig", config)
 
-    async def notify_log(self, device_id: str, page_size: int = 20) -> Any:
-        """Return page 1 of the notification log for ``device_id``."""
+    async def notify_log(self, device_id: str, page_size: int = NOTIFY_LOG_PAGE_SIZE) -> Any:
+        """Return page 1 of the notification log for ``device_id``.
+
+        A small page and a long timeout, both measured rather than chosen:
+        see `NOTIFY_LOG_PAGE_SIZE` for the numbers.
+        """
         params = {"deviceId": device_id, "pageNum": 1, "pageSize": page_size}
-        return await self.request("GET", "/app/notify/getNotifyLog", params)
+        return await self.request(
+            "GET", "/app/notify/getNotifyLog", params, timeout_seconds=NOTIFY_LOG_TIMEOUT_SECONDS
+        )
 
     # -- Writers ---------------------------------------------------------
     #
