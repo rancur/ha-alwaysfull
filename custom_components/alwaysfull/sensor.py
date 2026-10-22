@@ -31,18 +31,20 @@ rediscovered later:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
-    SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
 from homeassistant.core import callback
+from homeassistant.util import dt as dt_util
 
-from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, UNKNOWN
+from .const import ALERT_OPTIONS, ALERT_TYPE_OPTIONS, ATTR_RAW_TYPE, FILL_ALERT_TYPE, UNKNOWN
 from .entity import AlwaysFullEntity, async_add_bowl_entities
 from .models import (
     SLAVE_TYPE_BOTTLE_PUMP,
@@ -55,7 +57,6 @@ from .models import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from datetime import datetime
 
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -199,6 +200,34 @@ def _water_source_attributes(bowl: BowlData) -> dict[str, Any]:
     return {ATTR_RAW_SLAVE_TYPE: bowl.state.slave_type}
 
 
+def _last_refill(bowl: BowlData) -> datetime | None:
+    """Return when the bowl last reported a routine fill, as an aware instant.
+
+    Read off the notify log rather than the device row because the row
+    carries nothing about fills; the vendor writes one
+    `Operation_Confirmation` alert per fill, stamped as an explicit-UTC
+    ISO string (`2026-09-16T23:35:36Z`). The newest such row is chosen by
+    `alert_sort_key`, the same ordering the alert sensor and event use,
+    for the same reason: the page is not guaranteed to arrive sorted.
+
+    `None` when no fill is on the page -- which is also what a page full
+    of other alerts produces, so it means "none seen", not "never".
+    """
+    fills = [row for row in bowl.notifications if isinstance(row, dict) and row.get("type") == FILL_ALERT_TYPE]
+    if not fills:
+        return None
+    stamp = max(fills, key=alert_sort_key).get("createTime")
+    if not isinstance(stamp, str):
+        return None
+    parsed = dt_util.parse_datetime(stamp)
+    # A naive stamp would raise inside the state write (see the module
+    # docstring); the vendor's are explicit UTC, and one that is not is
+    # reported as unknown rather than guessed at.
+    if parsed is None or parsed.tzinfo is None:
+        return None
+    return parsed
+
+
 @dataclass(frozen=True, kw_only=True)
 class AlwaysFullSensorEntityDescription(SensorEntityDescription):
     """Describes one Always Full sensor."""
@@ -211,6 +240,12 @@ class AlwaysFullSensorEntityDescription(SensorEntityDescription):
     # Set only where normalising the state throws away something a user
     # might need -- currently just the vendor's raw alert type.
     attributes_fn: Callable[[BowlData], dict[str, Any]] | None = None
+    # Set only where the value is OBSERVED by this integration rather than
+    # read from the vendor, so a restart would otherwise lose it: the last
+    # drink is the time a poll saw today's total rise, and the vendor has
+    # no record of it to re-read. The stored value stands in until the
+    # coordinator observes a newer one.
+    restore: bool = False
 
 
 SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
@@ -229,6 +264,45 @@ SENSORS: tuple[AlwaysFullSensorEntityDescription, ...] = (
         # copies of one mapping is a conversion waiting to be half-fixed.
         unit_fn=lambda bowl: bowl.state.water_unit,
         value_fn=lambda bowl: bowl.water_today,
+    ),
+    AlwaysFullSensorEntityDescription(
+        key="water_total",
+        translation_key="water_total",
+        device_class=SensorDeviceClass.VOLUME,
+        # A lifetime meter: every completed day's total plus today's, so it
+        # only ever climbs, and Home Assistant's long-term statistics keep
+        # it as one for as long as the recorder runs. `unknown` when the
+        # vendor gives no registration date to sum from.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=0,
+        unit_fn=lambda bowl: bowl.state.water_unit,
+        value_fn=lambda bowl: bowl.water_total,
+    ),
+    # -- Two instants the vendor does not publish as such -----------------
+    #
+    # `last_drink` is this integration's own observation: the poll that
+    # first saw today's total rise. The vendor's log is daily aggregates
+    # only (docs/VENDOR-API.md §7), so this is as close as the API allows,
+    # at the poll interval's resolution. It is restored across restarts
+    # because nothing upstream can supply it again.
+    #
+    # `last_refill` is read: the newest routine-fill alert on the notify
+    # page, which the vendor stamps in explicit UTC. A fill follows the
+    # level dropping, so it usually trails a drink, but it is a different
+    # event with a different meaning, and the two are kept apart rather
+    # than merged into one guess.
+    AlwaysFullSensorEntityDescription(
+        key="last_drink",
+        translation_key="last_drink",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda bowl: bowl.last_drink,
+        restore=True,
+    ),
+    AlwaysFullSensorEntityDescription(
+        key="last_refill",
+        translation_key="last_refill",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=_last_refill,
     ),
     AlwaysFullSensorEntityDescription(
         key="filter_life",
@@ -360,8 +434,16 @@ async def async_setup_entry(
     )
 
 
-class AlwaysFullSensor(AlwaysFullEntity, SensorEntity):
-    """One value read off a bowl."""
+class AlwaysFullSensor(AlwaysFullEntity, RestoreSensor):
+    """One value read off a bowl.
+
+    `RestoreSensor` rather than `SensorEntity`, but only the descriptions
+    marked `restore` ever read the stored value back; for every other
+    sensor the vendor's answer is the only truth and the restore machinery
+    is inert. The stored value is used solely while the coordinator has
+    nothing newer, so a value the vendor (or a poll) does supply always
+    wins over one that was merely remembered.
+    """
 
     entity_description: AlwaysFullSensorEntityDescription
 
@@ -373,7 +455,17 @@ class AlwaysFullSensor(AlwaysFullEntity, SensorEntity):
     ) -> None:
         """Bind the description and take an initial reading of the unit."""
         super().__init__(coordinator, device_id, description)
+        self._restored: datetime | None = None
         self._sync_unit()
+
+    async def async_added_to_hass(self) -> None:
+        """Pick up the value this entity last published, if it is one worth keeping."""
+        await super().async_added_to_hass()
+        if not self.entity_description.restore:
+            return
+        last = await self.async_get_last_sensor_data()
+        if last is not None and isinstance(last.native_value, datetime):
+            self._restored = last.native_value
 
     @callback
     def _sync_unit(self) -> None:
@@ -396,11 +488,14 @@ class AlwaysFullSensor(AlwaysFullEntity, SensorEntity):
 
     @property
     def native_value(self) -> SensorValue:
-        """Return this sensor's value from the last poll."""
+        """Return this sensor's value from the last poll, or the restored one."""
         bowl = self.bowl
         if bowl is None:
             return None
-        return self.entity_description.value_fn(bowl)
+        value = self.entity_description.value_fn(bowl)
+        if value is None and self.entity_description.restore:
+            return self._restored
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:

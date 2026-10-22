@@ -4,6 +4,26 @@ Release notes, newest first. Releases before 0.4.0 predate this file; their
 changes are in the commit history, one `build: ship as <version>` commit per
 release.
 
+## Unreleased
+
+### Three new sensors per bowl
+
+- **Water lifetime** — every completed day since the bowl was registered plus
+  today, as a `total_increasing` volume, so Home Assistant's long-term
+  statistics keep a lifetime meter. The history is read once at startup in
+  windows of at most 180 days (the vendor answers a window of a year or more
+  with an empty array), then one request per bowl per day. `unknown` when the
+  device row carries no `createTime`.
+- **Last drink** — the poll that first saw today's total rise. The vendor's
+  log has no per-drink detail, so this is this integration's own observation
+  at the scan interval's resolution. Restored across restarts; `unknown` until
+  the first rise is seen.
+- **Last refill** — the newest routine-fill alert on the vendor's notify page,
+  as a timestamp.
+
+Nothing existing changes: no entity ids, unique ids or states are affected.
+The diagnostics download gains `water_total` and `last_drink` per bowl.
+
 ## 0.4.0
 
 ### ⚠️ Breaking: the two connection times are timestamps, not text

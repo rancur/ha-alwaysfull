@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
+from typing import Any
 
 import aiohttp
 import pytest
@@ -13,6 +14,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -21,6 +23,7 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.alwaysfull.const import (
     DOMAIN,
     EMPTY_DEVICE_LIST_EVERY_N_POLLS,
+    HISTORY_CHUNK_DAYS,
     NOTIFY_CONFIG_EVERY_N_POLLS,
     RELOGIN_MAX_ATTEMPTS,
     RELOGIN_WINDOW_SECONDS,
@@ -44,6 +47,7 @@ from .conftest import (
     FROZEN_ZONE,
     SECOND_DEVICE_ID,
     FakeAlwaysFullClient,
+    device_row,
     vendor_error,
     zone_unlike_host,
 )
@@ -105,7 +109,7 @@ async def test_one_device_list_call_plus_per_device_reads(
 
 
 async def test_every_device_in_the_list_is_polled(
-    hass: HomeAssistant, mock_api: FakeAlwaysFullClient
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
 ) -> None:
     """A second bowl must not be silently dropped.
 
@@ -113,12 +117,24 @@ async def test_every_device_in_the_list_is_polled(
     an implementation that only ever processed `rows[0]`, and a two-bowl
     household would get no entities for the second bowl with the suite
     still green.
+
+    Time is frozen because the first poll also reads each bowl's completed
+    history for the lifetime total, in windows of `HISTORY_CHUNK_DAYS`;
+    on the real clock the number of drinking-log calls per bowl would grow
+    as the fixture bowls aged. Each bowl is asked for today and then for
+    its history: two calls, in that order, per bowl.
     """
+    freezer.move_to(FROZEN_INSTANT)
     coordinator = await _setup(hass)
 
     assert mock_api.device_config_calls == [DEVICE_ID, SECOND_DEVICE_ID]
     assert mock_api.notify_log_calls == [DEVICE_ID, SECOND_DEVICE_ID]
-    assert [call[0] for call in mock_api.drinking_log_calls] == [DEVICE_ID, SECOND_DEVICE_ID]
+    assert [call[0] for call in mock_api.drinking_log_calls] == [
+        DEVICE_ID,
+        DEVICE_ID,
+        SECOND_DEVICE_ID,
+        SECOND_DEVICE_ID,
+    ]
     assert set(coordinator.data) == {DEVICE_ID, SECOND_DEVICE_ID}
 
     second = coordinator.data[SECOND_DEVICE_ID]
@@ -131,7 +147,7 @@ async def test_every_device_in_the_list_is_polled(
     assert second.water_today == 250
     assert second.config.device_id == SECOND_DEVICE_ID
     # The drinking log is requested in each bowl's OWN units.
-    assert [call[1] for call in mock_api.drinking_log_calls] == [1, 2]
+    assert [call[1] for call in mock_api.drinking_log_calls] == [1, 1, 2, 2]
 
 
 async def test_device_row_without_an_id_is_skipped(
@@ -785,3 +801,264 @@ async def test_a_persistent_empty_device_list_is_repeated_but_rarely(
             await coordinator.async_refresh()
 
         assert len(_our_warnings(caplog)) == 1
+
+
+# -- Lifetime total and last drink -------------------------------------------
+#
+# All frozen at FROZEN_INSTANT in FROZEN_ZONE: 18:00 UTC on the 16th, which
+# is 03:00 on the 17th in Tokyo. Both fixture bowls were registered on
+# 2026-09-15 UTC, so the first history read starts one day before that
+# local date (the 14th) and runs through yesterday (the 16th). The fake
+# answers every drinking-log request with one row dated at the window's
+# START carrying the bowl's total, plus a 1999 row outside any window, so
+# each history window adds exactly one bowl-total to the lifetime sum.
+
+HISTORY_FIRST_DAY = "2026-09-14"
+HISTORY_YESTERDAY = "2026-09-16"
+
+
+async def _setup_frozen(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> AlwaysFullCoordinator:
+    freezer.move_to(FROZEN_INSTANT)
+    await hass.config.async_set_time_zone(FROZEN_ZONE)
+    return await _setup(hass)
+
+
+async def test_lifetime_total_is_every_completed_day_plus_today(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """The first poll reads the bowl's history once, from registration to yesterday.
+
+    903 for the one history window plus 903 for today. The 1999 row the
+    fake includes in every answer is dated outside the window and must not
+    be summed -- 4242 would show up in the total if it were.
+    """
+    coordinator = await _setup_frozen(hass, freezer)
+
+    assert mock_api.drinking_log_calls == [
+        (DEVICE_ID, 1, FROZEN_LOCAL_DATE, FROZEN_LOCAL_DATE),
+        (DEVICE_ID, 1, HISTORY_FIRST_DAY, HISTORY_YESTERDAY),
+        (SECOND_DEVICE_ID, 2, FROZEN_LOCAL_DATE, FROZEN_LOCAL_DATE),
+        (SECOND_DEVICE_ID, 2, HISTORY_FIRST_DAY, HISTORY_YESTERDAY),
+    ]
+    assert coordinator.data[DEVICE_ID].water_total == 903 + 903
+    assert coordinator.data[SECOND_DEVICE_ID].water_total == 250 + 250
+
+
+async def test_history_is_not_read_again_until_a_day_completes(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """Within a day every further poll costs one drinking-log call per bowl, not two."""
+    coordinator = await _setup_frozen(hass, freezer)
+    assert len(mock_api.drinking_log_calls) == 4
+
+    freezer.tick(timedelta(minutes=5))
+    await coordinator.async_refresh()
+
+    assert [call[2:] for call in mock_api.drinking_log_calls[4:]] == [
+        (FROZEN_LOCAL_DATE, FROZEN_LOCAL_DATE),
+        (FROZEN_LOCAL_DATE, FROZEN_LOCAL_DATE),
+    ]
+    assert coordinator.data[DEVICE_ID].water_total == 903 + 903
+
+
+async def test_history_catches_up_by_one_day_after_midnight(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """The first poll of a new day folds exactly the day that just completed into the sum."""
+    coordinator = await _setup_frozen(hass, freezer)
+
+    freezer.tick(timedelta(days=1))
+    await coordinator.async_refresh()
+
+    assert (DEVICE_ID, 1, FROZEN_LOCAL_DATE, FROZEN_LOCAL_DATE) in mock_api.drinking_log_calls[4:]
+    assert coordinator.data[DEVICE_ID].water_total == 903 + 903 + 903
+
+
+async def test_history_is_read_in_bounded_windows(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """A bowl older than one window is read in several, each at most HISTORY_CHUNK_DAYS.
+
+    The vendor answers a window of a year or more with an empty array, so
+    one unbounded read of an old bowl's history would report a lifetime of
+    zero. Frozen 199 days after the first history day, so the catch-up
+    needs two windows and the second one is short.
+    """
+    first = date.fromisoformat(HISTORY_FIRST_DAY)
+    yesterday = first + timedelta(days=198)
+    freezer.move_to(f"{yesterday + timedelta(days=1)}T00:00:00+00:00")
+    await hass.config.async_set_time_zone("UTC")
+    coordinator = await _setup(hass)
+
+    window_end = first + timedelta(days=HISTORY_CHUNK_DAYS - 1)
+    history_calls = [call for call in mock_api.drinking_log_calls if call[0] == DEVICE_ID][1:]
+    assert history_calls == [
+        (DEVICE_ID, 1, first.isoformat(), window_end.isoformat()),
+        (DEVICE_ID, 1, (window_end + timedelta(days=1)).isoformat(), yesterday.isoformat()),
+    ]
+    assert coordinator.data[DEVICE_ID].water_total == 903 * 3
+
+
+async def test_a_units_change_rebuilds_the_history_in_the_new_unit(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """Totals in millilitres and totals in fluid ounces must never be summed together."""
+    coordinator = await _setup_frozen(hass, freezer)
+
+    mock_api.device_rows_override = [device_row(units=2), device_row(SECOND_DEVICE_ID)]
+    await coordinator.async_refresh()
+
+    assert (DEVICE_ID, 2, HISTORY_FIRST_DAY, HISTORY_YESTERDAY) in mock_api.drinking_log_calls[4:]
+    assert coordinator.data[DEVICE_ID].water_total == 903 + 903
+
+
+async def test_no_registration_date_means_no_lifetime_total(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """Without a `createTime` there is no honest place to start summing from."""
+    row = device_row()
+    del row["createTime"]
+    mock_api.device_rows_override = [row]
+    coordinator = await _setup_frozen(hass, freezer)
+
+    assert coordinator.data[DEVICE_ID].water_today == 903
+    assert coordinator.data[DEVICE_ID].water_total is None
+    assert coordinator.data[DEVICE_ID].last_drink is None
+    assert len(mock_api.drinking_log_calls) == 1
+
+
+async def test_a_failed_history_window_is_resumed_not_repeated(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """Windows already summed stay summed; the next poll continues from the failure.
+
+    Set up normally, then jump far enough ahead that the catch-up needs two
+    windows, and make the second one fail once. The poll fails as a whole
+    -- a partial lifetime must not be published as the whole -- but the
+    first window is not read again, and the retry completes the sum.
+    """
+    coordinator = await _setup_frozen(hass, freezer)
+
+    first_catch_up_day = date.fromisoformat(FROZEN_LOCAL_DATE)
+    window_end = first_catch_up_day + timedelta(days=HISTORY_CHUNK_DAYS - 1)
+    second_window = ((window_end + timedelta(days=1)).isoformat(),) * 2
+    # Local midnight-plus-three-hours on the day after `second_window`.
+    freezer.move_to(f"{window_end + timedelta(days=1)}T18:00:00+00:00")
+
+    real_drinking_log = mock_api.drinking_log
+    tripped: list[str] = []
+
+    async def flaky(device_id: str, units: int, start: str, end: str) -> Any:
+        if start == second_window[0] and not tripped:
+            tripped.append(start)
+            msg = "vendor hiccup"
+            raise AlwaysFullError(msg)
+        return await real_drinking_log(device_id, units, start, end)
+
+    mock_api.drinking_log = flaky  # type: ignore[method-assign]
+
+    await coordinator.async_refresh()
+    assert coordinator.last_update_success is False
+
+    await coordinator.async_refresh()
+    assert coordinator.last_update_success is True
+
+    windows = [call[2:] for call in mock_api.drinking_log_calls if call[0] == DEVICE_ID and call[2] != call[3]]
+    assert windows == [
+        (HISTORY_FIRST_DAY, HISTORY_YESTERDAY),
+        (first_catch_up_day.isoformat(), window_end.isoformat()),
+    ]
+    # The tripped read never reached the fake, so it is not recorded; the
+    # retry is the one and only successful read of that window.
+    assert tripped == [second_window[0]]
+    single_days = [call[2:] for call in mock_api.drinking_log_calls if call[0] == DEVICE_ID and call[2] == call[3]]
+    assert single_days.count(second_window) == 1
+    assert coordinator.data[DEVICE_ID].water_total == 903 * 4
+
+
+async def test_the_first_observation_claims_no_drink(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """A total of 903 at startup says the pet drank today, not when."""
+    coordinator = await _setup_frozen(hass, freezer)
+
+    assert coordinator.data[DEVICE_ID].last_drink is None
+
+
+async def test_a_rise_in_todays_total_is_a_drink_seen_now(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """The last drink is the poll that first saw today's total go up, and only that."""
+    coordinator = await _setup_frozen(hass, freezer)
+
+    freezer.tick(timedelta(minutes=1))
+    await coordinator.async_refresh()
+    assert coordinator.data[DEVICE_ID].last_drink is None
+
+    freezer.tick(timedelta(minutes=1))
+    mock_api.drinking_totals[DEVICE_ID] = 950
+    await coordinator.async_refresh()
+    seen = coordinator.data[DEVICE_ID].last_drink
+    assert seen == dt_util.now()
+    # The other bowl did not rise, and must not borrow this one's drink.
+    assert coordinator.data[SECOND_DEVICE_ID].last_drink is None
+
+    freezer.tick(timedelta(minutes=1))
+    await coordinator.async_refresh()
+    assert coordinator.data[DEVICE_ID].last_drink == seen
+
+
+async def test_a_missing_row_between_two_readings_is_not_a_rise(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """A poll with no row for today leaves the previous reading in place.
+
+    Otherwise 903 -> (no row) -> 903 would read as a rise from nothing and
+    invent a drink.
+    """
+    coordinator = await _setup_frozen(hass, freezer)
+
+    freezer.tick(timedelta(minutes=1))
+    mock_api.drinking_rows_override = []
+    await coordinator.async_refresh()
+    assert coordinator.data[DEVICE_ID].water_today is None
+
+    freezer.tick(timedelta(minutes=1))
+    mock_api.drinking_rows_override = None
+    await coordinator.async_refresh()
+    assert coordinator.data[DEVICE_ID].last_drink is None
+
+
+async def test_the_first_reading_of_a_new_day_compares_against_zero(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """After midnight, any water at all is a drink; none is not."""
+    coordinator = await _setup_frozen(hass, freezer)
+
+    freezer.tick(timedelta(days=1))
+    mock_api.drinking_totals[DEVICE_ID] = 0
+    mock_api.drinking_totals[SECOND_DEVICE_ID] = 12
+    await coordinator.async_refresh()
+
+    assert coordinator.data[DEVICE_ID].last_drink is None
+    assert coordinator.data[SECOND_DEVICE_ID].last_drink == dt_util.now()
+
+
+async def test_the_last_drink_survives_a_units_change(
+    hass: HomeAssistant, mock_api: FakeAlwaysFullClient, freezer: FrozenDateTimeFactory
+) -> None:
+    """The sums are rebuilt in the new unit; when the pet last drank is not unit-bound."""
+    coordinator = await _setup_frozen(hass, freezer)
+    freezer.tick(timedelta(minutes=1))
+    mock_api.drinking_totals[DEVICE_ID] = 950
+    await coordinator.async_refresh()
+    seen = coordinator.data[DEVICE_ID].last_drink
+    assert seen is not None
+
+    freezer.tick(timedelta(minutes=1))
+    mock_api.device_rows_override = [device_row(units=2), device_row(SECOND_DEVICE_ID)]
+    await coordinator.async_refresh()
+
+    assert coordinator.data[DEVICE_ID].last_drink == seen

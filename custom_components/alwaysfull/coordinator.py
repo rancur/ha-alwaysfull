@@ -6,6 +6,9 @@ Polling shape, per cycle:
   full device state, byte-identical in shape to `device/detail`, so the
   N extra detail calls the vendor app makes buy nothing here.
 - per device: `device/config`, today's `drinking/log`, and `notify/log`.
+- per device, only on the first poll and then once a day: the
+  `drinking/log` for every completed day not yet folded into the lifetime
+  total, in windows of at most `HISTORY_CHUNK_DAYS`. See `BowlHistory`.
 - `notify/getConfig` only once every `NOTIFY_CONFIG_EVERY_N_POLLS` cycles.
   It is account-level, not per-device, and changes only when the user edits
   it.
@@ -52,7 +55,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -66,6 +69,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     EMPTY_DEVICE_LIST_EVERY_N_POLLS,
+    HISTORY_CHUNK_DAYS,
     LOGGER,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
@@ -80,7 +84,7 @@ from .exceptions import (
     AlwaysFullRateLimitError,
     AlwaysFullReloginThrottledError,
 )
-from .models import BowlConfig, BowlState
+from .models import BowlConfig, BowlState, parse_device_timestamp
 
 CREDENTIALS_REJECTED_MESSAGE = "Always Full rejected the stored credentials"
 
@@ -94,6 +98,37 @@ if TYPE_CHECKING:
 
 
 @dataclasses.dataclass(slots=True)
+class BowlHistory:
+    """What the coordinator remembers about one bowl BETWEEN polls.
+
+    `BowlData` is rebuilt from the vendor's answers on every poll; this is
+    the part that cannot be, because it is accumulated: the sum of every
+    completed day's drinking log, and the last reading of today's total so
+    the next one can be compared with it. It lives on the coordinator,
+    keyed by device id, and is thrown away whenever the bowl's `units`
+    change, because every drinking-log total comes back in the units the
+    request named and a sum across two units is not a number.
+    """
+
+    units: int
+    # The last COMPLETED local day whose total is folded into `total`.
+    # Days after it are not yet known; days up to it will not be asked
+    # for again. A day the server has no row for is covered too, so a
+    # permanently missing day costs one request, not one per poll.
+    through: date
+    # Sum of `totalCapacity` over every day up to and including `through`.
+    total: int = 0
+    # The previous poll's `water_today`, with the local date it belonged
+    # to, so a rise between two polls can be told from a day rolling over.
+    observed_date: str | None = None
+    observed_value: int | None = None
+    # When a rise in today's total was last SEEN. Not when the pet drank:
+    # the vendor's log carries daily aggregates only, so this is the poll
+    # that first saw the total go up, at the poll interval's resolution.
+    last_drink: datetime | None = None
+
+
+@dataclasses.dataclass(slots=True)
 class BowlData:
     """Everything one poll learned about a single bowl."""
 
@@ -103,6 +138,10 @@ class BowlData:
     water_today: int | None
     notifications: list[dict[str, Any]]
     raw: dict[str, Any]
+    # Every completed day's total plus today's, or `None` when the bowl's
+    # registration date is unknown and there is no lifetime to sum over.
+    water_total: int | None = None
+    last_drink: datetime | None = None
 
     @property
     def firmware_version(self) -> str | None:
@@ -201,6 +240,8 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
         # Consecutive polls that found no bowls at all. Drives
         # `_warn_if_no_devices`; zero means the last poll found some.
         self._empty_polls = 0
+        # Per-bowl memory that outlives a poll. See `BowlHistory`.
+        self._history: dict[str, BowlHistory] = {}
 
     async def _async_update_data(self) -> dict[str, BowlData]:
         """Poll every bowl, mapping vendor failures onto HA's error model."""
@@ -316,7 +357,8 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
 
         envelope = await self.client.device_list() or {}
         rows: list[dict[str, Any]] = envelope.get("data") or []
-        today = dt_util.now().strftime("%Y-%m-%d")
+        now = dt_util.now()
+        today = now.strftime("%Y-%m-%d")
 
         data: dict[str, BowlData] = {}
         for row in rows:
@@ -325,15 +367,21 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
             if not device_id:
                 LOGGER.debug("Skipping a device row with no deviceId")
                 continue
+            water_today = await self._async_water_today(device_id, state.units, today)
+            history = await self._async_history(device_id, state.units, row.get("createTime"), now)
+            if history is not None:
+                self._observe_drink(history, today, water_today, now)
             data[device_id] = BowlData(
                 device_id=device_id,
                 state=state,
                 config=BowlConfig.from_api(await self.client.device_config(device_id) or {}),
-                water_today=await self._async_water_today(device_id, state.units, today),
+                water_today=water_today,
                 notifications=self._notifications_for(
                     device_id, (await self.client.notify_log(device_id) or {}).get("data") or []
                 ),
                 raw=row,
+                water_total=None if history is None else history.total + (water_today or 0),
+                last_drink=None if history is None else history.last_drink,
             )
 
         if self._poll_count % NOTIFY_CONFIG_EVERY_N_POLLS == 0:
@@ -426,6 +474,116 @@ class AlwaysFullCoordinator(DataUpdateCoordinator[dict[str, BowlData]]):
             if entry.get("drinkingDate") == today:
                 return entry.get("totalCapacity")
         return None
+
+    async def _async_history(
+        self,
+        device_id: str,
+        units: int,
+        create_time: Any,
+        now: datetime,
+    ) -> BowlHistory | None:
+        """Bring this bowl's completed-day history up to yesterday, and return it.
+
+        The lifetime total is `history.total` plus today's reading, and
+        this is what keeps `history.total` current. On the first poll for a
+        bowl it reads every completed day since the bowl was registered;
+        after that it reads nothing until a day rolls over, and then only
+        the one day that just completed. So the steady-state cost is one
+        extra request per bowl per day, not per poll.
+
+        The starting point is the device row's `createTime`, which is UTC
+        (docs/VENDOR-API.md §3.3) while the log is bucketed by the local
+        day the signed `timeZone` names. Rather than reason about which
+        local day the registration instant falls in, the read starts one
+        day EARLIER than the local date of that instant. The server
+        zero-fills days before the bowl existed (§7), so starting early
+        adds nothing to the sum and removes the boundary from the problem.
+
+        Windows are capped at `HISTORY_CHUNK_DAYS` because a window of a
+        year or more comes back EMPTY (§7) -- a bowl that old would report
+        a lifetime of zero, with no error anywhere.
+
+        Returns `None`, and reports no lifetime, when the row has no
+        usable `createTime`: there is no honest starting point to sum
+        from, and a total that silently began at an arbitrary date would
+        be a smaller number presented as the whole.
+
+        Rebuilt from scratch when `units` change, keeping only
+        `last_drink`: the sums are in the old unit and cannot be carried
+        over, but when the pet last drank does not depend on the unit.
+        """
+        history = self._history.get(device_id)
+        if history is None or history.units != units:
+            created = parse_device_timestamp(create_time)
+            if created is None:
+                self._history.pop(device_id, None)
+                return None
+            first = created.astimezone(now.tzinfo).date() - timedelta(days=1)
+            history = BowlHistory(
+                units=units,
+                through=first - timedelta(days=1),
+                last_drink=None if history is None else history.last_drink,
+            )
+            self._history[device_id] = history
+
+        yesterday = now.date() - timedelta(days=1)
+        start = history.through + timedelta(days=1)
+        while start <= yesterday:
+            end = min(start + timedelta(days=HISTORY_CHUNK_DAYS - 1), yesterday)
+            rows = await self.client.drinking_log(device_id, units, start.isoformat(), end.isoformat())
+            # `total` and `through` advance together, so a failure on a
+            # later chunk leaves a consistent partial sum for the next
+            # poll to continue from rather than a sum that double-counts.
+            history.total += self._sum_rows(rows or [], start.isoformat(), end.isoformat())
+            history.through = end
+            start = end + timedelta(days=1)
+        return history
+
+    @staticmethod
+    def _sum_rows(rows: list[Any], start: str, end: str) -> int:
+        """Sum `totalCapacity` over the rows dated inside `start`..`end`.
+
+        The window is enforced here as well as in the request because the
+        server has been seen answering with a row for TOMORROW (a zero,
+        dated one day past the requested `endTime`), and a row outside the
+        window would otherwise be summed now and summed again when its own
+        day is asked for. `drinkingDate` is `YYYY-MM-DD`, so string
+        comparison is date comparison.
+        """
+        total = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            day = row.get("drinkingDate")
+            value = row.get("totalCapacity")
+            if isinstance(day, str) and start <= day <= end and isinstance(value, int | float):
+                total += int(value)
+        return total
+
+    @staticmethod
+    def _observe_drink(history: BowlHistory, today: str, water_today: int | None, now: datetime) -> None:
+        """Note whether today's total rose since the previous poll.
+
+        A rise within the same local day is a drink seen at `now`. The
+        first poll of a NEW day compares against zero instead of against
+        yesterday's closing total, which is higher than any early-morning
+        reading and would otherwise hide the first drink of every day.
+
+        The very first observation for a bowl claims nothing: a total of
+        600 at startup says the pet drank today, not when. A missing row
+        (`None`) is skipped and leaves the previous observation in place,
+        so a transient "no row" between two real readings cannot turn the
+        second one into a false rise from zero.
+        """
+        if water_today is None:
+            return
+        if history.observed_date == today:
+            if history.observed_value is not None and water_today > history.observed_value:
+                history.last_drink = now
+        elif history.observed_date is not None and water_today > 0:
+            history.last_drink = now
+        history.observed_date = today
+        history.observed_value = water_today
 
     async def async_refresh_after_write(
         self, device_id: str, config: BowlConfig | None = None

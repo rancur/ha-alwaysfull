@@ -112,6 +112,11 @@ WRITE_ENTITY_CLASSES = (
 # this is the entity that says what actually went wrong.
 EXPECTED_CATEGORIES = {
     "water_today": None,
+    "water_total": None,
+    # Both instants are what an owner asks first -- "has she drunk?",
+    # "is it topping up?" -- so neither belongs under the diagnostics fold.
+    "last_drink": None,
+    "last_refill": None,
     "filter_life": None,
     "filter_remaining": None,
     "last_alert": None,
@@ -156,9 +161,9 @@ def possible_units(description: AlwaysFullSensorEntityDescription) -> set[str]:
 def test_every_unit_that_follows_the_bowl_comes_from_one_definition(units: int) -> None:
     """The sensor and the numbers must report the SAME volume unit.
 
-    Three entities take their unit from the bowl rather than from
-    themselves -- water consumed, and the two daily thresholds -- and they
-    live in two different platform modules. The mapping was written out
+    Four entities take their unit from the bowl rather than from
+    themselves -- water today, water lifetime, and the two daily thresholds
+    -- and they live in two different platform modules. The mapping was written out
     twice, verbatim, which is a unit conversion waiting to be half-fixed:
     a bowl switched to fluid ounces would then read its daily maximum in
     millilitres while its consumption read in ounces, and nothing would
@@ -175,7 +180,7 @@ def test_every_unit_that_follows_the_bowl_comes_from_one_definition(units: int) 
         for description in table
         if description.unit_fn is not None
     ]
-    assert len(unit_fns) == 3, "water consumed and the two daily thresholds"
+    assert len(unit_fns) == 4, "water today, water lifetime and the two daily thresholds"
     assert {unit_fn(bowl) for unit_fn in unit_fns} == {water_unit(units)}
 
 

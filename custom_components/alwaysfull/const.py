@@ -184,3 +184,17 @@ ALERT_OPTIONS = (*ALERT_TYPE_OPTIONS.values(), UNKNOWN)
 # vendor ships after this table was written is indistinguishable from no
 # alert at all.
 ATTR_RAW_TYPE = "raw_type"
+
+# The widest `drinking/log` window asked for in one request when the
+# coordinator catches up on a bowl's history for the lifetime total. The
+# vendor answers a window of roughly a year or more with an EMPTY array
+# rather than a truncated one (docs/VENDOR-API.md §7), so a single
+# "everything since the bowl was registered" request would read as a bowl
+# that has never been drunk from. Half a year keeps every chunk well
+# inside the cap; a two-year-old bowl costs four requests, once, at setup.
+HISTORY_CHUNK_DAYS = 180
+
+# The vendor's own `type` string for a routine fill, which is the only
+# alert that marks something the bowl DID rather than something wrong with
+# it. The last-refill sensor is built from it.
+FILL_ALERT_TYPE = "Operation_Confirmation"
